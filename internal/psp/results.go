@@ -18,15 +18,20 @@ import (
 
 	"github.com/brenokcunha/light-pix/internal/broker"
 	"github.com/brenokcunha/light-pix/internal/iso20022"
+	"github.com/brenokcunha/light-pix/internal/pix"
 	"github.com/brenokcunha/light-pix/internal/store"
 )
 
 // errSkip aborta a transação de Finish quando não há o que fazer.
 var errSkip = errors.New("nada a aplicar")
 
-// HandleResult trata uma pacs.002 vinda do SPI (fila pix.results). ACSC
-// confirma o Pix enviado; RJCT o rejeita. Mensagens sobre transações que este
-// PSP não enviou são ignoradas (o lado recebedor é tratado à parte).
+// HandleResult trata uma pacs.002 vinda do SPI (fila pix.results). Para o Pix
+// que este PSP enviou, ACSC confirma e RJCT rejeita; para o que recebeu, ACSC
+// credita a conta e RJCT (prazo estourado, saldo do pagador) cancela o
+// recebimento.
+//
+// Uma resposta sobre um Pix recebido que ainda não foi registrado (a pacs.002
+// correu na frente da pacs.008 entre as filas) volta à fila e é tentada de novo.
 func (s *Service) HandleResult(ctx context.Context, d amqp.Delivery) error {
 	var env iso20022.Envelope
 	if err := json.Unmarshal(d.Body, &env); err != nil {
@@ -36,17 +41,39 @@ func (s *Service) HandleResult(ctx context.Context, d amqp.Delivery) error {
 		return broker.Permanent(fmt.Errorf("pacs.002 inválida: %v", err))
 	}
 	st := env.FIToFIPmtStsRpt.TxInfAndSts
+	e2e := st.OrgnlEndToEndId
 	trace.SpanFromContext(ctx).SetAttributes(
-		attribute.String("pix.end_to_end_id", st.OrgnlEndToEndId),
+		attribute.String("pix.end_to_end_id", e2e),
 		attribute.String("pix.tx_status", st.TxSts))
 
+	var state, reason string
+	var settledAt *time.Time
 	switch st.TxSts {
 	case iso20022.StatusSettled:
-		return s.Finish(ctx, st.OrgnlEndToEndId, StateConfirmed, "", st.FctvIntrBkSttlmDt)
+		state, settledAt = StateConfirmed, st.FctvIntrBkSttlmDt
 	case iso20022.StatusRejected:
-		return s.Finish(ctx, st.OrgnlEndToEndId, StateRejected, st.StsRsnInf.Rsn, nil)
+		state, reason = StateRejected, st.StsRsnInf.Rsn
 	default:
-		return nil // ACSP não muda o estado do pagador
+		return nil // ACSP não muda o estado de ninguém
+	}
+
+	p, err := s.store.FindPayment(ctx, e2e)
+	switch {
+	case errors.Is(err, mongo.ErrNoDocuments):
+		if payer, _ := pix.ParseEndToEndID(e2e); payer == s.ispb {
+			slog.WarnContext(ctx, "resultado de Pix enviado que não existe neste PSP; ignorado", "end_to_end_id", e2e)
+			return nil
+		}
+		return fmt.Errorf("pix recebido %s ainda não registrado", e2e)
+	case err != nil:
+		return err
+	case p.Direction == DirectionIn:
+		if state == StateConfirmed {
+			state = StateCredited
+		}
+		return s.FinishIncoming(ctx, e2e, state, reason, settledAt)
+	default:
+		return s.Finish(ctx, e2e, state, reason, settledAt)
 	}
 }
 

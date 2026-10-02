@@ -53,7 +53,9 @@ A resposta traz o `endToEndId`; `GET /v1/pix/payments/{endToEndId}` mostra o
 estado (`PENDING` → `SENT` → `CONFIRMED`) e `GET /v1/accounts/0001/1000001` o
 saldo. No Grafana, Explore → Tempo → `{span.pix.end_to_end_id="E..."}` abre o
 trace do Pix, da API ao worker passando pelos dois PSPs e pelos simuladores.
-O crédito na conta do recebedor ainda não existe (Pix recebido é a F3).
+O mesmo `endToEndId` consultado no PSP B (`localhost:8082`) mostra o recebimento
+(`RECEIVED` → `ACCEPTED` → `CREDITED`), e `GET /v1/accounts/0001/2000001` mostra
+o saldo de Bob já creditado.
 
 ## Conferir os sinais
 

@@ -56,6 +56,7 @@ type Service struct {
 	tracer   trace.Tracer
 	created  metric.Int64Counter
 	finished metric.Int64Counter
+	received metric.Int64Counter
 	duration metric.Float64Histogram
 }
 
@@ -73,6 +74,10 @@ func NewService(ispb string, st *Store, keys KeyResolver) (*Service, error) {
 	}
 	if s.finished, err = meter.Int64Counter("pix.payments.finished",
 		metric.WithDescription("Pix enviados que chegaram a um estado final")); err != nil {
+		return nil, err
+	}
+	if s.received, err = meter.Int64Counter("pix.receipts",
+		metric.WithDescription("Pix recebidos, por estado alcançado (ACCEPTED, REJECTED, CREDITED)")); err != nil {
 		return nil, err
 	}
 	s.duration, err = meter.Float64Histogram("pix.payment.duration", metric.WithUnit("s"),

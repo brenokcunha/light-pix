@@ -92,19 +92,26 @@ roteia: `pacs.008` recebida → `pix.incoming`; `pacs.002` → `pix.results`. O 
 só é confirmado ao SPI (`?ack=` do `PI-PULL-NEXT`) depois de publicado com
 confirm. Cada mensagem continua o trace de quem a originou no SPI.
 
-**result-worker** — consome `pix.results` e fecha o pagamento enviado:
-`ACSC` → `CONFIRMED` (baixa `held`); `RJCT` → `REJECTED` (devolve `held` para
-`available`). Estado, saldo e razão mudam numa transação, condicionada ao
+**result-worker** — consome `pix.results` e fecha o pagamento: no Pix enviado,
+`ACSC` → `CONFIRMED` (baixa `held`) e `RJCT` → `REJECTED` (devolve `held` para
+`available`); no recebido, ver o incoming-worker. Estado, saldo e razão mudam numa transação, condicionada ao
 pagamento ainda estar em `PENDING` ou `SENT`, então reentregas não fazem nada.
-Notifica o cliente (log; webhook fica para depois).
+Notifica o cliente (log; webhook fica para depois). Uma `pacs.002` sobre Pix
+recebido ainda não registrado (correu na frente da `pacs.008` entre as filas)
+volta à fila e é tentada de novo; sobre Pix enviado que este PSP não conhece, é
+descartada.
 
-**incoming-worker** — consome `pix.incoming`: valida conta de destino e grava o
-recebimento `RECEIVED`; responde `pacs.002` `ACSP` (aceite) ou `RJCT` (ex.:
-conta inexistente/bloqueada) via outbox. Na confirmação de liquidação (`ACSC`)
-credita a conta (`CREDITED`). Tudo idempotente por `EndToEndId`.
-*Hoje (F2) só responde: `ACSP` se a conta existe e está ativa, `RJCT AC03` se não
-existe, `RJCT AC06` se bloqueada ou encerrada. Gravar o recebimento e creditar é
-a F3.*
+**incoming-worker** — consome `pix.incoming` (`pacs.008` vinda do SPI). Numa
+transação, grava o recebimento em `payments` (`direction = IN`, `_id =
+EndToEndId`) e a resposta na outbox: conta existe e está ativa → `ACCEPTED` e
+`pacs.002 ACSP`; conta inexistente → `REJECTED` e `RJCT AC03`; conta bloqueada
+ou encerrada → `REJECTED` e `RJCT AC06`. O histórico começa em `RECEIVED`.
+Reentrega da mesma `pacs.008` não faz nada (o `_id` já existe). O crédito só
+acontece na liquidação: o `ACSC` que o SPI manda ao recebedor chega por
+`pix.results` e leva `ACCEPTED` → `CREDITED`, creditando `available` e lançando
+`CREDIT` no razão, tudo na mesma transação e condicionado ao estado. Um `RJCT`
+tardio (prazo estourado) leva `ACCEPTED` → `REJECTED` sem mover dinheiro; um
+`RJCT` depois de `CREDITED` é ignorado.
 
 **pending-resolver** — job periódico que busca pagamentos/recebimentos em estado
 não terminal além de um limiar (ex.: `PENDING`/`SENT` > 40s, `ACCEPTED` sem
@@ -212,8 +219,8 @@ reprocessar um evento antigo nunca regride um pagamento.
 | Coleção | Conteúdo | Índices |
 |---|---|---|
 | `accounts` | agência/conta, titular, `balance.available`, `balance.held` (centavos), status | único (agência, conta) |
-| `ledger_entries` | lançamentos append-only (`SEED`, `HOLD`, `CONFIRM`, `RELEASE`; crédito na F3), cada um com `availableDelta` e `heldDelta`: o saldo é a soma do razão | único (conta, `EndToEndId`, tipo); (conta, data) |
-| `payments` | `_id = EndToEndId`, direção, estado, valor, partes, histórico, `createdAt` (t0), `sentAt`, `settledAt`, `finishedAt` | estado + `updatedAt` (resolver) |
+| `ledger_entries` | lançamentos append-only (`SEED`, `HOLD`, `CONFIRM`, `RELEASE`, `CREDIT`), cada um com `availableDelta` e `heldDelta`: o saldo é a soma do razão | único (conta, `EndToEndId`, tipo); (conta, data) |
+| `payments` | `_id = EndToEndId`, direção (`OUT`/`IN`), estado, valor, partes, histórico, `createdAt` (OUT: t0; IN: chegada da `pacs.008`), `sentAt`, `acceptedAt`, `settledAt`, `finishedAt` | estado + `updatedAt` (resolver) |
 | `idempotency_keys` | (conta, `Idempotency-Key`) → `EndToEndId` + hash do pedido | único (conta, chave), TTL 24h |
 | `outbox` | rota, `messageId`, corpo JSON, `traceContext`, `createdAt`, `publishedAt` | `publishedAt` (TTL 24h só nos publicados) |
 | `relay_checkpoints` | resume token do change stream | — |
@@ -310,8 +317,9 @@ docs               arquitetura, ADRs, runbooks
 - **bacen-sim:** conta PI/STR (saldo, aporte/retirada, extrato) + cálculo do IGA.
 - **resolvedor de pendências:** estados não terminais via consulta ao SPI,
   reprocessamento de DLQ e reconciliação diária conta PI × ledger.
-- **Pix recebido na F2:** o incoming-worker só aceita ou recusa; sem isso o Pix
-  enviado não fecharia o ciclo. A gravação do recebimento e o crédito (e o
-  `ACSC` do lado recebedor, hoje ignorado) entram na F3.
+- **Enviado e recebido na mesma coleção:** `payments` guarda os dois sentidos
+  (o `EndToEndId` carrega o ISPB do pagador, então não colide entre PSPs). O
+  recebimento nasce já `ACCEPTED` (ou `REJECTED`) na mesma transação que grava a
+  resposta, em vez de passar por `RECEIVED` como estado persistido.
 - **Dois PSPs no compose:** compartilham o mesmo Mongo e RabbitMQ (database e
   vhost separados) para manter a máquina leve.

@@ -11,8 +11,11 @@ import (
 	"github.com/brenokcunha/light-pix/internal/pix"
 )
 
-// Sentidos do pagamento.
-const DirectionOut = "OUT"
+// Sentidos do pagamento: OUT é o Pix que este PSP enviou; IN, o que recebeu.
+const (
+	DirectionOut = "OUT"
+	DirectionIn  = "IN"
+)
 
 // Estados do Pix enviado. Só avançam: PENDING → SENT → CONFIRMED | REJECTED.
 const (
@@ -20,6 +23,15 @@ const (
 	StateSent      = "SENT"      // SPI aceitou a pacs.008
 	StateConfirmed = "CONFIRMED" // liquidado (ACSC): a reserva foi baixada
 	StateRejected  = "REJECTED"  // recusado (RJCT): a reserva voltou ao saldo
+)
+
+// Estados do Pix recebido: RECEIVED → ACCEPTED → CREDITED | REJECTED. O
+// registro nasce já em ACCEPTED (ou REJECTED, se a conta não pode receber),
+// com RECEIVED no histórico.
+const (
+	StateReceived = "RECEIVED" // pacs.008 chegou do SPI
+	StateAccepted = "ACCEPTED" // ACSP enviado; aguarda a liquidação
+	StateCredited = "CREDITED" // liquidado (ACSC): a conta foi creditada
 )
 
 // Situações da conta.
@@ -36,6 +48,7 @@ const (
 	EntryHold    = "HOLD"    // reserva ao iniciar o Pix: available −, held +
 	EntryConfirm = "CONFIRM" // liquidação: held −
 	EntryRelease = "RELEASE" // rejeição: held −, available +
+	EntryCredit  = "CREDIT"  // Pix recebido liquidado: available +
 )
 
 // Holder é o titular da conta.
@@ -87,7 +100,8 @@ type Party struct {
 	Name   string `bson:"name" json:"name"`
 	TaxID  string `bson:"taxId" json:"taxId"`
 	Key    string `bson:"key,omitempty" json:"key,omitempty"` // chave Pix usada (só no recebedor)
-	// AccountID liga o pagador à conta do PSP; não vai na API.
+	// AccountID liga a ponta à conta deste PSP (pagador no Pix enviado,
+	// recebedor no recebido); não vai na API.
 	AccountID bson.ObjectID `bson:"accountId,omitempty" json:"-"`
 }
 
@@ -110,8 +124,9 @@ type Payment struct {
 	MsgID       string       `bson:"msgId" json:"-"` // MsgId da pacs.008
 	Reason      string       `bson:"reason,omitempty" json:"reason,omitempty"`
 	History     []Transition `bson:"history" json:"history"`
-	CreatedAt   time.Time    `bson:"createdAt" json:"createdAt"` // t0: o pedido chegou à API
+	CreatedAt   time.Time    `bson:"createdAt" json:"createdAt"` // OUT: t0, o pedido chegou à API; IN: a pacs.008 chegou
 	SentAt      *time.Time   `bson:"sentAt,omitempty" json:"sentAt,omitempty"`
+	AcceptedAt  *time.Time   `bson:"acceptedAt,omitempty" json:"acceptedAt,omitempty"` // IN: ACSP enviado
 	SettledAt   *time.Time   `bson:"settledAt,omitempty" json:"settledAt,omitempty"`
 	FinishedAt  *time.Time   `bson:"finishedAt,omitempty" json:"finishedAt,omitempty"`
 	UpdatedAt   time.Time    `bson:"updatedAt" json:"updatedAt"`
