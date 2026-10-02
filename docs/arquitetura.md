@@ -62,30 +62,49 @@ Binário único `psp` com subcomandos (`api`, `relay`, `connector`, `worker`,
 
 **payment-api** — recebe a ordem (`POST /v1/pix/payments`) com header
 `Idempotency-Key`, gera o `EndToEndId`, resolve a chave no DICT (via gateway com
-cache curto, timeout por `context`, retry limitado e circuit breaker) e, numa
-única transação MongoDB: reserva o saldo (`available -= v`, `held += v`, com
-condição `available >= v`), grava o pagamento `PENDING` e o evento de outbox.
-Também expõe consulta de pagamento, contas e gestão de chaves (proxy ao DICT).
+cache curto, timeout por tentativa, retry com backoff e jitter só para erros
+transitórios e circuit breaker) e, numa única transação MongoDB: grava a chave
+de idempotência, reserva o saldo (`available -= v`, `held += v`, com condição
+`available >= v`), lança a reserva no razão, grava o pagamento `PENDING` e o
+evento de outbox com a `pacs.008`.
+- Idempotência por (conta pagadora, `Idempotency-Key`): repetir o mesmo pedido
+  devolve o pagamento original (`200`, `Idempotent-Replayed: true`); outro pedido
+  com a mesma chave → `422 IDEMPOTENCY_KEY_REUSED`.
+- Erros de negócio: `INSUFFICIENT_FUNDS`, `ACCOUNT_NOT_FOUND`, `ACCOUNT_NOT_ACTIVE`,
+  `KEY_NOT_FOUND`, `SAME_PSP_NOT_SUPPORTED` (422), `DICT_RATE_LIMITED` (429),
+  `DICT_UNAVAILABLE` (503, falha rápida com o breaker aberto).
+- Também expõe `GET /v1/pix/payments/{endToEndId}`, `GET /v1/accounts/{agência}/{conta}`
+  e gestão de chaves (`POST /v1/keys`, `DELETE /v1/keys/{chave}`, proxy ao DICT).
 
 **outbox-relay** — escuta o change stream da coleção `outbox`, publica no
 RabbitMQ com publisher confirms, marca `publishedAt` e persiste o resume token.
-Copia o `traceparent` gravado no evento para os headers AMQP. Entrega
+Continua o trace gravado no evento (o `traceparent` segue nos headers AMQP).
+Uma varredura periódica publica o que o stream não entregou (primeira subida,
+falha de publicação, token descartado por `ChangeStreamHistoryLost`). Entrega
 at-least-once: duplicatas são absorvidas pela idempotência dos consumidores.
 
-**spi-connector** — consome `spi.out`, monta a mensagem (JSON com a semântica
-e os nomes de campo do ISO 20022), "assina" (stub) e envia ao SPI. Em paralelo, faz long-polling do stream de
-entrada do SPI e roteia: `pacs.008` recebida → `pix.incoming`; `pacs.002` →
-`pix.results`. Controla timeout e reenvio sem duplicar (o SPI também deduplica
-por `EndToEndId`).
+**spi-connector** — consome `spi.out` e envia ao SPI (a `pacs.008` do Pix
+enviado e as `pacs.002` de resposta do lado recebedor). Aceite do SPI (`202`)
+leva o pagamento a `SENT`; recusa definitiva (4xx) rejeita o pagamento e libera a
+reserva; falha transitória devolve a mensagem à fila, e o reenvio é seguro
+porque o SPI deduplica por `EndToEndId`. Em paralelo, faz long-polling do SPI e
+roteia: `pacs.008` recebida → `pix.incoming`; `pacs.002` → `pix.results`. O lote
+só é confirmado ao SPI (`?ack=` do `PI-PULL-NEXT`) depois de publicado com
+confirm. Cada mensagem continua o trace de quem a originou no SPI.
 
 **result-worker** — consome `pix.results` e fecha o pagamento enviado:
 `ACSC` → `CONFIRMED` (baixa `held`); `RJCT` → `REJECTED` (devolve `held` para
-`available`). Notifica o cliente (webhook/log).
+`available`). Estado, saldo e razão mudam numa transação, condicionada ao
+pagamento ainda estar em `PENDING` ou `SENT`, então reentregas não fazem nada.
+Notifica o cliente (log; webhook fica para depois).
 
 **incoming-worker** — consome `pix.incoming`: valida conta de destino e grava o
 recebimento `RECEIVED`; responde `pacs.002` `ACSP` (aceite) ou `RJCT` (ex.:
 conta inexistente/bloqueada) via outbox. Na confirmação de liquidação (`ACSC`)
 credita a conta (`CREDITED`). Tudo idempotente por `EndToEndId`.
+*Hoje (F2) só responde: `ACSP` se a conta existe e está ativa, `RJCT AC03` se não
+existe, `RJCT AC06` se bloqueada ou encerrada. Gravar o recebimento e creditar é
+a F3.*
 
 **pending-resolver** — job periódico que busca pagamentos/recebimentos em estado
 não terminal além de um limiar (ex.: `PENDING`/`SENT` > 40s, `ACCEPTED` sem
@@ -192,20 +211,25 @@ reprocessar um evento antigo nunca regride um pagamento.
 
 | Coleção | Conteúdo | Índices |
 |---|---|---|
-| `accounts` | agência/conta, titular, `balance.available`, `balance.held`, status | único (agência, conta) |
-| `ledger_entries` | lançamentos append-only (débito, crédito, reserva, estorno) | (conta, data) |
-| `payments` | `_id = EndToEndId`, direção, estado, valor, partes, histórico, timestamps do IGA, `traceparent` | estado + `updatedAt` (resolver) |
-| `idempotency_keys` | (cliente, `Idempotency-Key`) → `EndToEndId` | único, TTL 24h |
-| `outbox` | evento, payload, `traceparent`, `createdAt`, `publishedAt` | `publishedAt` |
+| `accounts` | agência/conta, titular, `balance.available`, `balance.held` (centavos), status | único (agência, conta) |
+| `ledger_entries` | lançamentos append-only (`SEED`, `HOLD`, `CONFIRM`, `RELEASE`; crédito na F3), cada um com `availableDelta` e `heldDelta`: o saldo é a soma do razão | único (conta, `EndToEndId`, tipo); (conta, data) |
+| `payments` | `_id = EndToEndId`, direção, estado, valor, partes, histórico, `createdAt` (t0), `sentAt`, `settledAt`, `finishedAt` | estado + `updatedAt` (resolver) |
+| `idempotency_keys` | (conta, `Idempotency-Key`) → `EndToEndId` + hash do pedido | único (conta, chave), TTL 24h |
+| `outbox` | rota, `messageId`, corpo JSON, `traceContext`, `createdAt`, `publishedAt` | `publishedAt` (TTL 24h só nos publicados) |
 | `relay_checkpoints` | resume token do change stream | — |
 
 ## 9. Mensageria (RabbitMQ, um vhost por PSP)
 
 - Exchange `pix` (topic) e `pix.dlx` (dead-letter).
 - Quorum queues: `spi.out`, `pix.results`, `pix.incoming`, cada uma com
-  `x-delivery-limit` e DLQ (`*.dlq`).
-- Retry: filas `*.retry.{5s,30s,2m}` com TTL que devolvem para a fila de origem.
-- Headers: `traceparent`, `x-enqueued-at` (mede a idade da mensagem), `x-attempt`.
+  `x-delivery-limit` (10) e DLQ (`*.dlq`, via `pix.dlx`). Cada processo declara
+  a topologia ao subir (idempotente).
+- Consumidores com ack manual: erro transitório espera `RETRY_DELAY` e devolve a
+  mensagem à fila (nack com requeue); mensagem malformada vai direto à DLQ; ao
+  estourar o limite de entregas a fila a manda à DLQ.
+- Retry com backoff (F4): filas `*.retry.{5s,30s,2m}` com TTL que devolvem para a fila de origem.
+- Headers: `traceparent`, `x-enqueued-at` (idade da mensagem, vira a métrica
+  `broker.message.age`); `x-attempt` chega com o retry da F4.
 
 ## 10. Observabilidade
 
@@ -286,5 +310,8 @@ docs               arquitetura, ADRs, runbooks
 - **bacen-sim:** conta PI/STR (saldo, aporte/retirada, extrato) + cálculo do IGA.
 - **resolvedor de pendências:** estados não terminais via consulta ao SPI,
   reprocessamento de DLQ e reconciliação diária conta PI × ledger.
+- **Pix recebido na F2:** o incoming-worker só aceita ou recusa; sem isso o Pix
+  enviado não fecharia o ciclo. A gravação do recebimento e o crédito (e o
+  `ACSC` do lado recebedor, hoje ignorado) entram na F3.
 - **Dois PSPs no compose:** compartilham o mesmo Mongo e RabbitMQ (database e
   vhost separados) para manter a máquina leve.

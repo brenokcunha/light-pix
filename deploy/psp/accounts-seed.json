@@ -1,0 +1,18 @@
+[
+  {
+    "ispb": "11111111", "branch": "0001", "number": "1000001", "type": "CACC", "balance": 10000.00,
+    "holder": { "type": "NATURAL_PERSON", "name": "Alice Andrade", "taxId": "12345678909" }
+  },
+  {
+    "ispb": "11111111", "branch": "0001", "number": "1000002", "type": "CACC", "balance": 10000.00,
+    "holder": { "type": "NATURAL_PERSON", "name": "Carol Costa", "taxId": "98765432100" }
+  },
+  {
+    "ispb": "22222222", "branch": "0001", "number": "2000001", "type": "CACC", "balance": 10000.00,
+    "holder": { "type": "NATURAL_PERSON", "name": "Bob Barros", "taxId": "11144477735" }
+  },
+  {
+    "ispb": "22222222", "branch": "0001", "number": "2000002", "type": "CACC", "balance": 10000.00,
+    "holder": { "type": "NATURAL_PERSON", "name": "Dave Duarte", "taxId": "39053344705" }
+  }
+]

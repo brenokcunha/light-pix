@@ -26,7 +26,9 @@ type Sim struct {
 	Name    string // service.name no OTel
 	Version string
 	DB      string // banco padrão, sobrescrito por MONGO_DB
-	Setup   func(ctx context.Context, client *mongo.Client, db string, mux *http.ServeMux) (background func(context.Context) error, err error)
+	// SkipTrace, se definido, exclui requisições dos traces (ex.: long-polling).
+	SkipTrace func(*http.Request) bool
+	Setup     func(ctx context.Context, client *mongo.Client, db string, mux *http.ServeMux) (background func(context.Context) error, err error)
 }
 
 // Main interpreta os argumentos e encerra o processo com o código adequado.
@@ -84,20 +86,27 @@ func serve(ctx context.Context, s Sim) error {
 		return err
 	}
 
+	slog.InfoContext(ctx, s.Name+" iniciando", "version", s.Version)
+	return Run(ctx, s.Name, mux, s.SkipTrace, background)
+}
+
+// Run serve mux em HTTP_ADDR (padrão :8080) e roda background, se houver,
+// até o contexto terminar. Se qualquer um dos dois parar, derruba o outro:
+// um serviço sem a rotina de fundo não deve continuar parecendo saudável.
+func Run(ctx context.Context, name string, mux *http.ServeMux, skipTrace func(*http.Request) bool, background func(context.Context) error) error {
 	ctx, cancelAll := context.WithCancel(ctx)
 	defer cancelAll()
 	bgDone := make(chan error, 1)
 	if background != nil {
 		go func() {
 			bgDone <- background(ctx)
-			cancelAll() // rotina de fundo morreu: derruba o serviço inteiro
+			cancelAll()
 		}()
 	} else {
 		bgDone <- nil
 	}
 
-	slog.InfoContext(ctx, s.Name+" iniciando", "version", s.Version)
-	serveErr := httpx.Serve(ctx, config.String("HTTP_ADDR", ":8080"), httpx.Instrument(s.Name, mux))
+	serveErr := httpx.Serve(ctx, config.String("HTTP_ADDR", ":8080"), httpx.InstrumentSkipping(name, mux, skipTrace))
 	cancelAll()
 	if err := <-bgDone; err != nil {
 		return err

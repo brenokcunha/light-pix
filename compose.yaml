@@ -20,11 +20,33 @@ x-psp: &psp
       condition: service_healthy
     otel-collector:
       condition: service_started
+    spi-sim:
+      condition: service_healthy
+    dict-sim:
+      condition: service_healthy
   healthcheck:
     test: ["CMD", "/app", "healthcheck"]
     interval: 10s
     timeout: 5s
     retries: 3
+
+x-psp-a-env: &psp-a-env
+  <<: *otel-env
+  OTEL_RESOURCE_ATTRIBUTES: psp.ispb=11111111,psp.name=psp-a,deployment.environment.name=local
+  PSP_ISPB: "11111111"
+  MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
+  MONGO_DB: psp_a
+  RABBITMQ_URL: amqp://lightpix:lightpix@rabbitmq:5672/psp-a
+  DICT_URL: http://dict-sim:8080
+
+x-psp-b-env: &psp-b-env
+  <<: *otel-env
+  OTEL_RESOURCE_ATTRIBUTES: psp.ispb=22222222,psp.name=psp-b,deployment.environment.name=local
+  PSP_ISPB: "22222222"
+  MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
+  MONGO_DB: psp_b
+  RABBITMQ_URL: amqp://lightpix:lightpix@rabbitmq:5672/psp-b
+  DICT_URL: http://dict-sim:8080
 
 x-sim: &sim
   restart: unless-stopped
@@ -41,27 +63,65 @@ x-sim: &sim
 
 services:
   # ---------------------------------------------------------------- PSPs
+  # PSP A (ISPB 11111111): um serviço por papel, todos com a mesma imagem
   psp-a-api:
     <<: *psp
     command: ["api"]
     ports: ["8081:8080"]
     environment:
-      <<: *otel-env
-      OTEL_RESOURCE_ATTRIBUTES: psp.ispb=11111111,psp.name=psp-a,deployment.environment.name=local
-      PSP_ISPB: "11111111"
-      MONGO_URI: mongodb://mongo:27017/psp_a?replicaSet=rs0
-      RABBITMQ_URL: amqp://lightpix:lightpix@rabbitmq:5672/psp-a
+      <<: *psp-a-env
+      PSP_ACCOUNTS_SEED_FILE: /etc/accounts-seed.json
+    volumes: [./deploy/psp/accounts-seed.json:/etc/accounts-seed.json:ro]
 
+  psp-a-relay:
+    <<: *psp
+    command: ["relay"]
+    environment:
+      <<: *psp-a-env
+
+  psp-a-connector:
+    <<: *psp
+    command: ["connector"]
+    environment:
+      <<: *psp-a-env
+      SPI_URL: http://spi-sim:8080
+      SPI_POLL_WAIT: 20s
+
+  psp-a-worker:
+    <<: *psp
+    command: ["worker"]
+    environment:
+      <<: *psp-a-env
+
+  # PSP B (ISPB 22222222): um serviço por papel, todos com a mesma imagem
   psp-b-api:
     <<: *psp
     command: ["api"]
     ports: ["8082:8080"]
     environment:
-      <<: *otel-env
-      OTEL_RESOURCE_ATTRIBUTES: psp.ispb=22222222,psp.name=psp-b,deployment.environment.name=local
-      PSP_ISPB: "22222222"
-      MONGO_URI: mongodb://mongo:27017/psp_b?replicaSet=rs0
-      RABBITMQ_URL: amqp://lightpix:lightpix@rabbitmq:5672/psp-b
+      <<: *psp-b-env
+      PSP_ACCOUNTS_SEED_FILE: /etc/accounts-seed.json
+    volumes: [./deploy/psp/accounts-seed.json:/etc/accounts-seed.json:ro]
+
+  psp-b-relay:
+    <<: *psp
+    command: ["relay"]
+    environment:
+      <<: *psp-b-env
+
+  psp-b-connector:
+    <<: *psp
+    command: ["connector"]
+    environment:
+      <<: *psp-b-env
+      SPI_URL: http://spi-sim:8080
+      SPI_POLL_WAIT: 20s
+
+  psp-b-worker:
+    <<: *psp
+    command: ["worker"]
+    environment:
+      <<: *psp-b-env
 
   # ------------------------------------------------------- Simuladores
   # Fazem o papel do BCB (SPI, DICT, contas PI). Cada um num banco próprio.

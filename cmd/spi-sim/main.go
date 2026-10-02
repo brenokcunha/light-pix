@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -19,7 +20,11 @@ import (
 var version = "dev"
 
 func main() {
-	app.Main(app.Sim{Name: "spi-sim", Version: version, DB: "spi", Setup: setup})
+	app.Main(app.Sim{
+		Name: "spi-sim", Version: version, DB: "spi", Setup: setup,
+		// Cada espera sem mensagens duraria segundos e viraria um trace "lento".
+		SkipTrace: func(r *http.Request) bool { return strings.HasSuffix(r.URL.Path, "/stream") },
+	})
 }
 
 func setup(ctx context.Context, client *mongo.Client, db string, mux *http.ServeMux) (func(context.Context) error, error) {

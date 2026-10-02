@@ -46,20 +46,32 @@ func newHTTPClient(base string, timeout time.Duration) httpClient {
 	}}
 }
 
+// newUntracedHTTPClient não cria spans: serve ao long-polling, que de outro
+// modo geraria um trace lento a cada espera sem mensagens.
+func newUntracedHTTPClient(base string) httpClient {
+	return httpClient{base: base, hc: &http.Client{}}
+}
+
 // do envia in como JSON (se não for nil) e decodifica a resposta 2xx em out
 // (se não for nil). Devolve o status para quem precisa distinguir 200 de 204.
 func (c httpClient) do(ctx context.Context, method, path string, header http.Header, in, out any) (int, error) {
+	status, _, err := c.doHeader(ctx, method, path, header, in, out)
+	return status, err
+}
+
+// doHeader é do, devolvendo também os headers da resposta.
+func (c httpClient) doHeader(ctx context.Context, method, path string, header http.Header, in, out any) (int, http.Header, error) {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
 		if err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		body = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	for k, v := range header {
 		req.Header[k] = v
@@ -69,19 +81,19 @@ func (c httpClient) do(ctx context.Context, method, path string, header http.Hea
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode/100 != 2 {
 		apiErr := &APIError{Status: resp.StatusCode}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(apiErr)
-		return resp.StatusCode, apiErr
+		return resp.StatusCode, resp.Header, apiErr
 	}
-	if out != nil && resp.StatusCode != http.StatusNoContent {
+	if out != nil && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusAccepted {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-			return resp.StatusCode, fmt.Errorf("decodificar resposta: %w", err)
+			return resp.StatusCode, resp.Header, fmt.Errorf("decodificar resposta: %w", err)
 		}
 	}
-	return resp.StatusCode, nil
+	return resp.StatusCode, resp.Header, nil
 }

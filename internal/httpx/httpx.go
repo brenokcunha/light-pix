@@ -22,8 +22,17 @@ type Check func(context.Context) error
 // /healthz fica de fora para não poluir os sinais com as sondas do
 // orquestrador.
 func Instrument(service string, h http.Handler) http.Handler {
+	return InstrumentSkipping(service, h, nil)
+}
+
+// InstrumentSkipping é Instrument, sem traces nem métricas para as
+// requisições em que skip devolve true. Serve ao long-polling, cujas esperas
+// de segundos seriam lentas demais para o tail sampling descartar.
+func InstrumentSkipping(service string, h http.Handler, skip func(*http.Request) bool) http.Handler {
 	return otelhttp.NewHandler(accessLog(h), service,
-		otelhttp.WithFilter(func(r *http.Request) bool { return r.URL.Path != "/healthz" }),
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			return r.URL.Path != "/healthz" && (skip == nil || !skip(r))
+		}),
 	)
 }
 

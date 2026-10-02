@@ -24,8 +24,8 @@ Primeira subida baixa as imagens e inicializa o replica set do MongoDB.
 | Prometheus | http://localhost:9090 |
 | Alertmanager | http://localhost:9093 |
 | RabbitMQ (lightpix / lightpix) | http://localhost:15672 |
-| psp-a payment-api (ISPB 11111111) | http://localhost:8081 |
-| psp-b payment-api (ISPB 22222222) | http://localhost:8082 |
+| psp-a payment-api (ISPB 11111111; também sobem relay, connector e worker) | http://localhost:8081 |
+| psp-b payment-api (ISPB 22222222; idem) | http://localhost:8082 |
 | spi-sim | http://localhost:8091 |
 | dict-sim | http://localhost:8092 |
 | bacen-sim (contas PI começam com R$ 1.000.000,00) | http://localhost:8093 |
@@ -35,6 +35,25 @@ Primeira subida baixa as imagens e inicializa o replica set do MongoDB.
 
 Do host, o MongoDB exige `directConnection=true`: o replica set anuncia o
 nome interno `mongo:27017`, que só resolve dentro da rede do compose.
+
+## Fazer um Pix
+
+Contas de exemplo (saldo inicial R$ 10.000,00): Alice `0001/1000001` e Carol
+`0001/1000002` no PSP A; Bob `0001/2000001` e Dave `0001/2000002` no PSP B. Cada
+uma tem chaves de e-mail (`alice@example.com`, ...), CPF e celular em
+`deploy/sims/dict-seed.json`.
+
+```bash
+curl -s -X POST http://localhost:8081/v1/pix/payments \
+  -H 'Idempotency-Key: meu-primeiro-pix' -H 'Content-Type: application/json' \
+  -d '{"debtorAccount":{"branch":"0001","number":"1000001"},"key":"bob@example.com","amount":25.50}'
+```
+
+A resposta traz o `endToEndId`; `GET /v1/pix/payments/{endToEndId}` mostra o
+estado (`PENDING` → `SENT` → `CONFIRMED`) e `GET /v1/accounts/0001/1000001` o
+saldo. No Grafana, Explore → Tempo → `{span.pix.end_to_end_id="E..."}` abre o
+trace do Pix, da API ao worker passando pelos dois PSPs e pelos simuladores.
+O crédito na conta do recebedor ainda não existe (Pix recebido é a F3).
 
 ## Conferir os sinais
 
@@ -57,6 +76,8 @@ curl http://localhost:8081/readyz
 | `TRACE_SAMPLE_PERCENT` | `.env` ou shell | % de traces normais guardados pelo tail sampling (padrão 100; erros e lentos são sempre guardados) |
 | `LOG_LEVEL` | serviços Go | `debug`, `info`, `warn`, `error` |
 | `SPI_*`, `DICT_*`, `BACEN_PI_ACCOUNTS` | `compose.yaml` (simuladores) | prazo do recebedor, long-poll e lease do SPI; rate limit do DICT; saldos iniciais das contas PI |
+| `DICT_TIMEOUT`, `DICT_ATTEMPTS`, `DICT_CACHE_TTL` | serviços do PSP | timeout por tentativa (800ms), tentativas por consulta (3) e cache de chaves (10s; `0` desliga) |
+| `RETRY_DELAY`, `WORKER_CONCURRENCY` | connector e worker | espera antes de devolver à fila uma mensagem que falhou (1s) e mensagens em paralelo (4) |
 
 ## Comandos
 
