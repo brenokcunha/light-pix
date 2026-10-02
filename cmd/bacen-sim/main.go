@@ -12,6 +12,7 @@ import (
 
 	"github.com/brenokcunha/light-pix/internal/app"
 	"github.com/brenokcunha/light-pix/internal/config"
+	"github.com/brenokcunha/light-pix/internal/faults"
 	"github.com/brenokcunha/light-pix/internal/pix"
 	"github.com/brenokcunha/light-pix/internal/sim/bacen"
 )
@@ -23,7 +24,7 @@ func main() {
 	app.Main(app.Sim{Name: "bacen-sim", Version: version, DB: "bacen", Setup: setup})
 }
 
-func setup(ctx context.Context, client *mongo.Client, db string, mux *http.ServeMux) (func(context.Context) error, error) {
+func setup(ctx context.Context, client *mongo.Client, db string, mux *http.ServeMux, fs *faults.State) (func(context.Context) error, error) {
 	initial, err := parseAccounts(config.List("BACEN_PI_ACCOUNTS", ""))
 	if err != nil {
 		return nil, err

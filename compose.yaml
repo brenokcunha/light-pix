@@ -86,6 +86,9 @@ services:
       <<: *psp-a-env
       SPI_URL: http://spi-sim:8080
       SPI_POLL_WAIT: 20s
+      # O envio ao SPI espera a resposta dele (a pacs.002 dispara a liquidação):
+      # mais mensagens em voo dão vazão sem mais réplicas.
+      WORKER_CONCURRENCY: "16"
 
   psp-a-worker:
     <<: *psp
@@ -130,6 +133,9 @@ services:
       <<: *psp-b-env
       SPI_URL: http://spi-sim:8080
       SPI_POLL_WAIT: 20s
+      # O envio ao SPI espera a resposta dele (a pacs.002 dispara a liquidação):
+      # mais mensagens em voo dão vazão sem mais réplicas.
+      WORKER_CONCURRENCY: "16"
 
   psp-b-worker:
     <<: *psp
@@ -201,6 +207,22 @@ services:
       MONGO_DB: bacen
       # Saldo inicial das contas PI (aplicado só na primeira subida).
       BACEN_PI_ACCOUNTS: "11111111:1000000.00,22222222:1000000.00"
+
+  # ---------------------------------------------------------------- Carga
+  # k6 sob demanda (profile "load"): make load. As métricas vão ao Prometheus.
+  k6:
+    image: grafana/k6:2.3.0
+    profiles: ["load"]
+    command: ["run", "-o", "experimental-prometheus-rw", "/scripts/pix.js"]
+    volumes: [./loadtest:/scripts:ro]
+    environment:
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_STATS: p(50),p(95),p(99),avg,max
+      K6_PROMETHEUS_RW_PUSH_INTERVAL: 5s
+    depends_on:
+      psp-a-api: {condition: service_healthy}
+      psp-b-api: {condition: service_healthy}
+      prometheus: {condition: service_started}
 
   # ---------------------------------------------------------- Dados e fila
   mongo:

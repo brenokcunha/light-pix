@@ -2,6 +2,7 @@ package outbox_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -87,8 +88,14 @@ func TestRelayDeliversViaChangeStreamAndResumes(t *testing.T) {
 	}
 
 	stop := startRelay()
+	added := time.Now()
 	add("m1")
 	waitMessage("m1")
+	// Com a varredura desligada, é o change stream que entrega: tem de ser
+	// rápido, não esperar outro evento nem um timeout.
+	if lag := time.Since(added); lag > time.Second {
+		t.Fatalf("o change stream levou %v para entregar um evento isolado", lag)
+	}
 	time.Sleep(200 * time.Millisecond) // deixa o checkpoint ser gravado
 	stop()
 
@@ -111,4 +118,76 @@ func TestRelayDeliversViaChangeStreamAndResumes(t *testing.T) {
 	if !published("m1") || !published("m2") {
 		t.Fatal("eventos não marcados como publicados")
 	}
+}
+
+// Uma rajada de eventos sai toda, sem perda, em tempo curto: o relay publica
+// em lotes, com as confirmações em voo ao mesmo tempo.
+func TestRelayPublishesBurstInBatches(t *testing.T) {
+	client, dbName := testutil.Mongo(t)
+	db := client.Database(dbName)
+	conn, err := broker.Dial(context.Background(), testutil.RabbitMQ(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	if err := broker.Declare(conn); err != nil {
+		t.Fatal(err)
+	}
+	pub, err := broker.NewPublisher(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := outbox.NewRelay(context.Background(), db, pub, outbox.RelayConfig{Name: "relay", SweepInterval: 200 * time.Millisecond, SweepMinAge: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Go(func() { _ = relay.Run(ctx) })
+	t.Cleanup(func() { cancel(); wg.Wait() })
+	time.Sleep(500 * time.Millisecond)
+
+	const n = 1000
+	var adders sync.WaitGroup
+	for i := range n {
+		adders.Go(func() {
+			err := store.Transact(context.Background(), client, func(ctx context.Context) error {
+				id := fmt.Sprintf("m%04d", i)
+				return outbox.Add(ctx, outbox.Collection(db), broker.QueueSPIOut, id, []byte(`{}`))
+			})
+			if err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	adders.Wait()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	deadline := time.Now().Add(15 * time.Second)
+	for len(seen) < n && time.Now().Before(deadline) {
+		msg, ok, err := ch.Get(broker.QueueSPIOut, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		seen[msg.MessageId] = true
+	}
+	if len(seen) != n {
+		t.Fatalf("chegaram %d de %d mensagens distintas", len(seen), n)
+	}
+	eventually := time.Now().Add(5 * time.Second)
+	for time.Now().Before(eventually) {
+		if c, _ := outbox.Collection(db).CountDocuments(context.Background(), bson.D{{Key: "publishedAt", Value: nil}}); c == 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("eventos publicados não foram marcados")
 }

@@ -26,6 +26,7 @@ import (
 
 	"github.com/brenokcunha/light-pix/internal/broker"
 	"github.com/brenokcunha/light-pix/internal/clients"
+	"github.com/brenokcunha/light-pix/internal/faults"
 	"github.com/brenokcunha/light-pix/internal/outbox"
 	"github.com/brenokcunha/light-pix/internal/pix"
 	"github.com/brenokcunha/light-pix/internal/psp"
@@ -58,10 +59,12 @@ type world struct {
 	t     *testing.T
 	spi   string // URL do spi-sim, atrás do proxy de falhas
 	proxy *spiProxy
-	opts  worldOpts
-	dict  string // URL do dict-sim
-	bacen *clients.Bacen
-	nodes map[string]*node
+	// faults é o estado das falhas injetadas no spi-sim (/admin/faults).
+	faults *faults.State
+	opts   worldOpts
+	dict   string // URL do dict-sim
+	bacen  *clients.Bacen
+	nodes  map[string]*node
 }
 
 type worldOpts struct {
@@ -140,14 +143,18 @@ func newWorld(t *testing.T, opts worldOpts) *world {
 
 	// spi-sim
 	sClient, sDB := testutil.Mongo(t)
+	w.faults, err = faults.NewState()
+	must(t, err)
 	s, err := spi.New(ctx, sClient, sDB, spi.Config{
+		Faults:       w.faults,
 		Participants: []string{ispbA, ispbB}, CreditorTimeout: opts.creditorTimeout, PollWait: 2 * time.Second,
 		Lease: 2 * time.Second, SweepInterval: 100 * time.Millisecond, SettleRetry: 500 * time.Millisecond, Settler: w.bacen,
 	})
 	must(t, err)
 	spiMux := http.NewServeMux()
 	s.Routes(spiMux)
-	realSPI := httptest.NewServer(otelhttp.NewHandler(spiMux, "sim"))
+	w.faults.Routes(spiMux)
+	realSPI := httptest.NewServer(otelhttp.NewHandler(w.faults.Wrap(spiMux), "sim"))
 	servers = append(servers, realSPI)
 	target, _ := url.Parse(realSPI.URL)
 	w.proxy = &spiProxy{next: httputil.NewSingleHostReverseProxy(target)}
@@ -447,4 +454,26 @@ func httpDo(t *testing.T, method, url string, body any, participant string) int 
 	must(t, err)
 	resp.Body.Close()
 	return resp.StatusCode
+}
+
+// setSPIFaults ativa falhas no spi-sim pela API administrativa.
+func (w *world) setSPIFaults(cfg faults.Config) {
+	w.t.Helper()
+	body, _ := json.Marshal(cfg)
+	req, _ := http.NewRequest(http.MethodPut, w.spi+"/admin/faults", bytes.NewReader(body))
+	resp, err := http.DefaultClient.Do(req)
+	must(w.t, err)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		w.t.Fatalf("PUT /admin/faults: %d", resp.StatusCode)
+	}
+}
+
+// clearSPIFaults desliga as falhas do spi-sim.
+func (w *world) clearSPIFaults() {
+	w.t.Helper()
+	req, _ := http.NewRequest(http.MethodDelete, w.spi+"/admin/faults", nil)
+	resp, err := http.DefaultClient.Do(req)
+	must(w.t, err)
+	resp.Body.Close()
 }

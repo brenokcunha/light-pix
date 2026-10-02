@@ -1,4 +1,4 @@
-.PHONY: up down reset ps logs build test test-integration vet fmt
+.PHONY: up down reset ps logs build test test-integration vet fmt load faults
 
 up: ## sobe a stack completa (rebuild das imagens Go)
 	docker compose up -d --build
@@ -34,3 +34,16 @@ vet:
 
 fmt:
 	gofmt -w .
+
+# Carga de Pix nos dois sentidos com k6 (container). Exemplos:
+#   make load RATE=20 DURATION=2m
+#   make load FAULTS_SPI='{"errorRate":0.3}' FAULTS_DICT='{"latency":{"mode":"fixed","ms":300}}'
+load: ## carga sustentada de Pix, com falhas opcionais nos simuladores
+	docker compose --profile load run --rm -e RATE -e DURATION -e FAULTS_SPI -e FAULTS_DICT -e FAULTS_BACEN k6
+
+# Falhas dos simuladores: make faults                 (mostra as atuais)
+#                         make faults s=spi j='{"dropPacs002":0.5}'
+#                         make faults s=spi j=clear
+s ?= spi
+faults: ## mostra, define ou limpa as falhas de um simulador (s=spi|dict|bacen)
+	@./scripts/faults.sh $(s) '$(j)'

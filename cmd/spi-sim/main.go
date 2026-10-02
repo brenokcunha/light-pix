@@ -13,6 +13,7 @@ import (
 	"github.com/brenokcunha/light-pix/internal/app"
 	"github.com/brenokcunha/light-pix/internal/clients"
 	"github.com/brenokcunha/light-pix/internal/config"
+	"github.com/brenokcunha/light-pix/internal/faults"
 	"github.com/brenokcunha/light-pix/internal/sim/spi"
 )
 
@@ -27,7 +28,7 @@ func main() {
 	})
 }
 
-func setup(ctx context.Context, client *mongo.Client, db string, mux *http.ServeMux) (func(context.Context) error, error) {
+func setup(ctx context.Context, client *mongo.Client, db string, mux *http.ServeMux, fs *faults.State) (func(context.Context) error, error) {
 	bacenURL, err := config.Required("BACEN_URL")
 	if err != nil {
 		return nil, err
@@ -35,6 +36,7 @@ func setup(ctx context.Context, client *mongo.Client, db string, mux *http.Serve
 	cfg := spi.Config{
 		Participants: config.List("SPI_PARTICIPANTS", "11111111,22222222"),
 		Settler:      clients.NewBacen(bacenURL, 5*time.Second),
+		Faults:       fs,
 	}
 	for _, d := range []struct {
 		dst *time.Duration

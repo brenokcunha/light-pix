@@ -12,10 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/brenokcunha/light-pix/internal/broker"
@@ -60,6 +57,7 @@ type Relay struct {
 	checkpoints *mongo.Collection
 	pub         *broker.Publisher
 	tracer      trace.Tracer
+	batchMu     sync.Mutex // serializa os lotes do stream e da varredura
 
 	published metric.Int64Counter
 	lag       metric.Float64Histogram
@@ -178,16 +176,27 @@ func (r *Relay) stream(ctx context.Context) error {
 	}()
 
 	for cs.Next(ctx) {
-		var ev struct {
-			FullDocument Event `bson:"fullDocument"`
-		}
-		if err := cs.Decode(&ev); err != nil {
-			return fmt.Errorf("decodificar evento: %w", err)
+		// Junta os eventos que já vieram no mesmo lote do servidor (até
+		// streamBatch) para publicar de uma vez. Só consome o que já está em
+		// memória: pedir mais ao servidor (TryNext) pode bloquear até chegar
+		// outro evento e atrasar a publicação deste lote.
+		batch := make([]Event, 0, streamBatch)
+		for {
+			var ev struct {
+				FullDocument Event `bson:"fullDocument"`
+			}
+			if err := cs.Decode(&ev); err != nil {
+				return fmt.Errorf("decodificar evento: %w", err)
+			}
+			batch = append(batch, ev.FullDocument)
+			if len(batch) == streamBatch || cs.RemainingBatchLength() == 0 || !cs.Next(ctx) {
+				break
+			}
 		}
 		// Falha de publicação não derruba o stream: o evento fica sem
 		// publishedAt e a varredura tenta de novo.
-		if err := r.publish(ctx, ev.FullDocument); err != nil && ctx.Err() == nil {
-			slog.WarnContext(ctx, "falha ao publicar evento da outbox; a varredura repete", "id", ev.FullDocument.ID.Hex(), "err", err)
+		if err := r.publishBatch(ctx, batch); err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "falha ao publicar eventos da outbox; a varredura repete", "events", len(batch), "err", err)
 		}
 		if time.Since(lastSave) >= r.cfg.CheckpointEvery {
 			save()
@@ -218,7 +227,7 @@ func (r *Relay) sweep(ctx context.Context, minAge time.Duration) error {
 		{Key: "createdAt", Value: bson.D{{Key: "$lte", Value: store.Now().Add(-minAge)}}},
 	}
 	for ctx.Err() == nil {
-		cur, err := r.events.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(100))
+		cur, err := r.events.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(sweepBatch))
 		if err != nil {
 			return err
 		}
@@ -226,59 +235,12 @@ func (r *Relay) sweep(ctx context.Context, minAge time.Duration) error {
 		if err := cur.All(ctx, &batch); err != nil {
 			return err
 		}
-		failed := false
-		for _, ev := range batch {
-			if err := r.publish(ctx, ev); err != nil {
-				slog.WarnContext(ctx, "falha ao publicar evento da outbox", "id", ev.ID.Hex(), "err", err)
-				failed = true
-			}
+		if err := r.publishBatch(ctx, batch); err != nil {
+			return err
 		}
-		if len(batch) < 100 || failed {
+		if len(batch) < sweepBatch {
 			return nil
 		}
 	}
-	return nil
-}
-
-// publish envia o evento e o marca como publicado. O span continua o trace de
-// quem gravou o evento; o traceparent da mensagem AMQP é o deste span.
-func (r *Relay) publish(ctx context.Context, ev Event) error {
-	pctx := otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(ev.TraceContext))
-	pctx, span := r.tracer.Start(pctx, "outbox.publish "+ev.RoutingKey, trace.WithSpanKind(trace.SpanKindProducer),
-		trace.WithAttributes(attribute.String("messaging.destination.name", ev.RoutingKey),
-			attribute.String("messaging.message.id", ev.MessageID)))
-	defer span.End()
-
-	result := "ok"
-	defer func() {
-		r.published.Add(ctx, 1, metric.WithAttributes(
-			attribute.String("routing_key", ev.RoutingKey), attribute.String("result", result)))
-	}()
-
-	// Um evento publicado pelo outro caminho (stream × varredura) não sai de novo.
-	var cur struct {
-		PublishedAt *time.Time `bson:"publishedAt"`
-	}
-	if err := r.events.FindOne(pctx, bson.D{{Key: "_id", Value: ev.ID}}).Decode(&cur); err == nil && cur.PublishedAt != nil {
-		result = "skipped"
-		return nil
-	}
-
-	if err := r.pub.Publish(pctx, broker.ExchangePix, ev.RoutingKey, broker.Message{
-		ID: ev.MessageID, Body: ev.Body, EnqueueAt: ev.CreatedAt,
-	}); err != nil {
-		result = "error"
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return err
-	}
-	now := store.Now()
-	if _, err := r.events.UpdateOne(pctx, bson.D{{Key: "_id", Value: ev.ID}, {Key: "publishedAt", Value: nil}},
-		bson.D{{Key: "$set", Value: bson.D{{Key: "publishedAt", Value: now}}}}); err != nil {
-		// Publicou mas não marcou: a varredura vai publicar de novo (duplicata aceita).
-		result = "error"
-		return fmt.Errorf("marcar evento como publicado: %w", err)
-	}
-	r.lag.Record(pctx, now.Sub(ev.CreatedAt).Seconds())
 	return nil
 }

@@ -22,6 +22,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/brenokcunha/light-pix/internal/faults"
 	"github.com/brenokcunha/light-pix/internal/httpx"
 	"github.com/brenokcunha/light-pix/internal/iso20022"
 	"github.com/brenokcunha/light-pix/internal/pix"
@@ -51,6 +52,9 @@ type Config struct {
 	SweepInterval   time.Duration // varredura de prazos vencidos e liquidações pendentes
 	SettleRetry     time.Duration // idade mínima de uma liquidação parada para nova tentativa
 	Settler         Settler
+	// Faults, se definido, injeta falhas do SPI: pacs.002 perdidas e
+	// recebedor que não responde.
+	Faults *faults.State
 }
 
 // Transaction é o registro da transação no SPI.
@@ -64,11 +68,14 @@ type Transaction struct {
 	Reason       string            `bson:"reason,omitempty"`
 	TraceContext map[string]string `bson:"traceContext,omitempty"`
 	ReceivedAt   time.Time         `bson:"receivedAt"`
-	Deadline     time.Time         `bson:"deadline"`
-	AcceptedAt   *time.Time        `bson:"acceptedAt,omitempty"`
-	SettledAt    *time.Time        `bson:"settledAt,omitempty"`
-	FinishedAt   *time.Time        `bson:"finishedAt,omitempty"`
-	UpdatedAt    time.Time         `bson:"updatedAt"`
+	// NotForwarded marca a transação que o SPI não encaminhou ao recebedor
+	// (falha injetada): no timeout, o recebedor não é avisado do que não viu.
+	NotForwarded bool       `bson:"notForwarded,omitempty"`
+	Deadline     time.Time  `bson:"deadline"`
+	AcceptedAt   *time.Time `bson:"acceptedAt,omitempty"`
+	SettledAt    *time.Time `bson:"settledAt,omitempty"`
+	FinishedAt   *time.Time `bson:"finishedAt,omitempty"`
+	UpdatedAt    time.Time  `bson:"updatedAt"`
 }
 
 // Server é o simulador do SPI.
@@ -224,7 +231,11 @@ func (s *Server) receivePacs008(ctx context.Context, env iso20022.Envelope) erro
 
 	now := store.Now()
 	tc := injectTrace(ctx)
+	// Falha injetada: o SPI registra a transação mas não a encaminha, como se o
+	// recebedor nunca respondesse; o prazo vence e o pagador recebe AB03.
+	forward := !s.cfg.Faults.Roll(ctx, s.cfg.Faults.Get().CreditorTimeoutRate, "creditor_timeout")
 	rec := Transaction{
+		NotForwarded: !forward,
 		EndToEndId:   tx.PmtId.EndToEndId,
 		MsgId:        doc.GrpHdr.MsgId,
 		DebtorISPB:   tx.DbtrAgt.MmbId,
@@ -244,6 +255,9 @@ func (s *Server) receivePacs008(ctx context.Context, env iso20022.Envelope) erro
 	err := store.Transact(ctx, s.client, func(ctx context.Context) error {
 		if _, err := s.txs.InsertOne(ctx, rec); err != nil {
 			return err
+		}
+		if !forward {
+			return nil
 		}
 		return s.enqueue(ctx, creditor, fwd, tc, now)
 	})
@@ -439,6 +453,11 @@ func (s *Server) enqueueStatus(ctx context.Context, tx Transaction, st iso20022.
 	}
 	tc := injectTrace(ctx)
 	for _, to := range targets {
+		// Falha injetada: a pacs.002 se perde. O estado da transação já mudou,
+		// então só a consulta de status (resolver) revela o resultado.
+		if s.cfg.Faults.Roll(ctx, s.cfg.Faults.Get().DropPacs002, "drop_pacs002") {
+			continue
+		}
 		env := iso20022.NewPacs002Envelope(pix.BCBISPB, to, tx.MsgId, st, now)
 		if err := s.enqueue(ctx, to, env, tc, now); err != nil {
 			return err
@@ -519,7 +538,7 @@ func (s *Server) sweep(ctx context.Context) error {
 	for _, tx := range expired {
 		tctx, span := s.tracer.Start(extractTrace(ctx, tx.TraceContext), "spi.creditor_timeout",
 			trace.WithAttributes(attribute.String("pix.end_to_end_id", tx.EndToEndId)))
-		if err := s.reject(tctx, tx, StatusAwaitingCreditor, iso20022.ReasonSettlementTimeout, true); err != nil {
+		if err := s.reject(tctx, tx, StatusAwaitingCreditor, iso20022.ReasonSettlementTimeout, !tx.NotForwarded); err != nil {
 			slog.ErrorContext(tctx, "falha ao rejeitar por prazo", "end_to_end_id", tx.EndToEndId, "err", err)
 		}
 		span.End()

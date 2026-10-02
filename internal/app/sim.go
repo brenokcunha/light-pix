@@ -15,6 +15,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/brenokcunha/light-pix/internal/config"
+	"github.com/brenokcunha/light-pix/internal/faults"
 	"github.com/brenokcunha/light-pix/internal/httpx"
 	"github.com/brenokcunha/light-pix/internal/store"
 	"github.com/brenokcunha/light-pix/internal/telemetry"
@@ -28,7 +29,10 @@ type Sim struct {
 	DB      string // banco padrão, sobrescrito por MONGO_DB
 	// SkipTrace, se definido, exclui requisições dos traces (ex.: long-polling).
 	SkipTrace func(*http.Request) bool
-	Setup     func(ctx context.Context, client *mongo.Client, db string, mux *http.ServeMux) (background func(context.Context) error, err error)
+	// Setup registra as rotas em mux. faults é o estado das falhas injetadas
+	// (já exposto em /admin/faults); o simulador o consulta para as falhas que
+	// só ele sabe aplicar.
+	Setup func(ctx context.Context, client *mongo.Client, db string, mux *http.ServeMux, faults *faults.State) (background func(context.Context) error, err error)
 }
 
 // Main interpreta os argumentos e encerra o processo com o código adequado.
@@ -81,19 +85,27 @@ func serve(ctx context.Context, s Sim) error {
 	httpx.HandleHealth(mux, map[string]httpx.Check{
 		"mongodb": func(ctx context.Context) error { return store.Ping(ctx, client) },
 	})
-	background, err := s.Setup(startCtx, client, config.String("MONGO_DB", s.DB), mux)
+	fs, err := faults.NewState()
+	if err != nil {
+		return err
+	}
+	if err := fs.FromEnv(config.String("FAULTS", "")); err != nil {
+		return err
+	}
+	fs.Routes(mux)
+	background, err := s.Setup(startCtx, client, config.String("MONGO_DB", s.DB), mux, fs)
 	if err != nil {
 		return err
 	}
 
 	slog.InfoContext(ctx, s.Name+" iniciando", "version", s.Version)
-	return Run(ctx, s.Name, mux, s.SkipTrace, background)
+	return Run(ctx, s.Name, fs.Wrap(mux), s.SkipTrace, background)
 }
 
-// Run serve mux em HTTP_ADDR (padrão :8080) e roda background, se houver,
+// Run serve h em HTTP_ADDR (padrão :8080) e roda background, se houver,
 // até o contexto terminar. Se qualquer um dos dois parar, derruba o outro:
 // um serviço sem a rotina de fundo não deve continuar parecendo saudável.
-func Run(ctx context.Context, name string, mux *http.ServeMux, skipTrace func(*http.Request) bool, background func(context.Context) error) error {
+func Run(ctx context.Context, name string, h http.Handler, skipTrace func(*http.Request) bool, background func(context.Context) error) error {
 	ctx, cancelAll := context.WithCancel(ctx)
 	defer cancelAll()
 	bgDone := make(chan error, 1)
@@ -106,7 +118,7 @@ func Run(ctx context.Context, name string, mux *http.ServeMux, skipTrace func(*h
 		bgDone <- nil
 	}
 
-	serveErr := httpx.Serve(ctx, config.String("HTTP_ADDR", ":8080"), httpx.InstrumentSkipping(name, mux, skipTrace))
+	serveErr := httpx.Serve(ctx, config.String("HTTP_ADDR", ":8080"), httpx.InstrumentSkipping(name, h, skipTrace))
 	cancelAll()
 	if err := <-bgDone; err != nil {
 		return err

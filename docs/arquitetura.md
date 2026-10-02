@@ -196,9 +196,24 @@ mesmas escritas condicionais do caminho normal, então várias réplicas convive
   (`GET /api/v1/iga/{ispb}`) e os expõe como métricas. Permite comparar o SLO
   interno do PSP com o que o regulador enxerga.
 
-**Injeção de falhas** (F5) — todos os simuladores expõem `/admin/faults` para
-configurar latência (fixa ou distribuição), taxa de erro HTTP, perda de
-`pacs.002`, timeout do recebedor e indisponibilidade total.
+**Injeção de falhas** — os três simuladores expõem `GET`, `PUT` e `DELETE
+/admin/faults` (PUT substitui tudo; DELETE desliga; `FAULTS` no ambiente dá a
+configuração inicial). As falhas mudam em tempo de execução, em memória, e
+`/admin`, `/healthz` e `/readyz` nunca são afetados (dá para desligar as falhas
+e o orquestrador não derruba o simulador). Cada falha injetada soma em
+`faults.injected{kind}` e marca o span (`fault.injected`, `fault.latency_ms`).
+
+| Campo | Efeito |
+|---|---|
+| `latency` | espera antes de responder: `{"mode":"fixed","ms":200}`, `{"mode":"uniform","minMs":50,"maxMs":400}` ou `{"mode":"lognormal","p50Ms":80,"p99Ms":1500}` (cauda longa) |
+| `errorRate`, `errorStatus` | fração (0 a 1) das requisições respondidas com o status (padrão 503) |
+| `unavailable` | 503 em tudo |
+| `paths` | restringe latência e erros a rotas com esses prefixos (vazio: todas) |
+| `dropPacs002` (SPI) | fração das `pacs.002` que o SPI nunca entrega; a transação avança e só a consulta de status revela o resultado |
+| `creditorTimeoutRate` (SPI) | fração das `pacs.008` que o SPI não encaminha ao recebedor: o prazo vence e só o pagador recebe `RJCT AB03` |
+
+Conta PI sem saldo (`AM04`) não é uma falha injetada: basta uma retirada STR
+(`POST /api/v1/pi-accounts/{ispb}/str-transfers`, `OUT`) esvaziar a conta.
 
 ## 6. Fluxos
 

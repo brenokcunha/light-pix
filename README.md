@@ -58,6 +58,34 @@ O mesmo `endToEndId` consultado no PSP B (`localhost:8082`) mostra o recebimento
 (`RECEIVED` → `ACCEPTED` → `CREDITED`), e `GET /v1/accounts/0001/2000001` mostra
 o saldo de Bob já creditado.
 
+## Falhas e carga
+
+Os simuladores aceitam falhas em tempo de execução (campos e efeitos em
+`docs/arquitetura.md`, seção "Injeção de falhas"):
+
+```bash
+make faults s=spi j='{"errorRate":0.3,"latency":{"mode":"lognormal","p50Ms":80,"p99Ms":1500}}'
+make faults s=spi j='{"dropPacs002":0.5}'     # pacs.002 perdidas: o resolver recupera
+make faults s=spi                             # mostra as atuais
+make faults s=spi j=clear                     # desliga
+```
+
+`make load` roda o k6 (container) com Pix nos dois sentidos e mede, do pedido ao
+estado final, a experiência do pagador; as métricas vão ao Prometheus (`k6_*`).
+As falhas podem entrar só durante a carga:
+
+```bash
+make load RATE=20 DURATION=2m
+make load RATE=10 DURATION=1m FAULTS_SPI='{"errorRate":0.2,"dropPacs002":0.1}' FAULTS_DICT='{"latency":{"mode":"fixed","ms":300}}'
+```
+
+Os limites do `loadtest/pix.js` são os do Pix (iniciação p95 < 1,5s, estado final
+p99 < 10s, nada preso); com falhas ativas eles podem falhar de propósito. Nesta
+máquina (8 CPUs, o laboratório inteiro no mesmo Docker) a carga se sustenta em
+cerca de 20 Pix/s; acima de ~25 Pix/s a fila cresce, o p99 passa de 10s e o
+MongoDB (um nó, transações em todo passo) é o recurso saturado. Depois de uma
+carga alta, espere os pagamentos pendentes terminarem antes da próxima rodada.
+
 ## Resolver e reconciliação
 
 O resolver de cada PSP resolve pagamentos parados consultando o SPI, devolve

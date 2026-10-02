@@ -61,8 +61,8 @@ type Message struct {
 }
 
 // Publisher publica com publisher confirms: Publish só volta depois que o
-// broker confirmou a gravação (quorum). É seguro para uso concorrente, mas
-// serializa as publicações.
+// broker confirmou a gravação (quorum). É seguro para uso concorrente; o
+// envio de cada mensagem é serializado, a espera pelo confirm não.
 type Publisher struct {
 	mu sync.Mutex
 	ch *amqp.Channel
@@ -84,10 +84,41 @@ func NewPublisher(conn *amqp.Connection) (*Publisher, error) {
 // Close fecha o canal.
 func (p *Publisher) Close() error { return p.ch.Close() }
 
-// Publish envia m ao exchange com a chave de roteamento, propagando o
-// contexto de trace de ctx nos headers (traceparent). Com exchange vazio, a
-// mensagem vai direto para a fila de nome igual à chave.
+// Confirmation é a confirmação pendente de uma mensagem publicada com
+// PublishAsync.
+type Confirmation struct {
+	key  string
+	conf *amqp.DeferredConfirmation
+}
+
+// Wait espera o broker confirmar (ou recusar) a mensagem.
+func (c *Confirmation) Wait(ctx context.Context) error {
+	acked, err := c.conf.WaitContext(ctx)
+	if err != nil {
+		return fmt.Errorf("broker: confirmação de %s: %w", c.key, err)
+	}
+	if !acked {
+		return errors.New("broker: publicação recusada (nack) pelo broker")
+	}
+	return nil
+}
+
+// Publish envia m ao exchange com a chave de roteamento e só volta depois do
+// confirm do broker. O contexto de trace de ctx segue nos headers
+// (traceparent). Com exchange vazio, a mensagem vai direto para a fila de nome
+// igual à chave.
 func (p *Publisher) Publish(ctx context.Context, exchange, key string, m Message) error {
+	c, err := p.PublishAsync(ctx, exchange, key, m)
+	if err != nil {
+		return err
+	}
+	return c.Wait(ctx)
+}
+
+// PublishAsync envia m sem esperar o confirm: várias mensagens podem estar em
+// voo ao mesmo tempo e o chamador espera cada Confirmation depois. É o que dá
+// vazão ao relay, em vez de uma ida e volta ao broker por mensagem.
+func (p *Publisher) PublishAsync(ctx context.Context, exchange, key string, m Message) (*Confirmation, error) {
 	enqueued := m.EnqueueAt
 	if enqueued.IsZero() {
 		enqueued = time.Now()
@@ -110,14 +141,7 @@ func (p *Publisher) Publish(ctx context.Context, exchange, key string, m Message
 		Body:         m.Body,
 	})
 	if err != nil {
-		return fmt.Errorf("broker: publicar em %s: %w", key, err)
+		return nil, fmt.Errorf("broker: publicar em %s: %w", key, err)
 	}
-	acked, err := conf.WaitContext(ctx)
-	if err != nil {
-		return fmt.Errorf("broker: confirmação de %s: %w", key, err)
-	}
-	if !acked {
-		return errors.New("broker: publicação recusada (nack) pelo broker")
-	}
-	return nil
+	return &Confirmation{key: key, conf: conf}, nil
 }
