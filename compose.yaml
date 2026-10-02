@@ -73,7 +73,7 @@ services:
       start_period: 10s
 
   rabbitmq:
-    image: rabbitmq:4.1-management
+    image: rabbitmq:4.3-management
     hostname: rabbitmq
     ports: ["5672:5672", "15672:15672"]
     volumes:
@@ -90,7 +90,7 @@ services:
 
   # ------------------------------------------------------- Observabilidade
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.131.0
+    image: otel/opentelemetry-collector-contrib:0.161.0
     command: ["--config=/etc/otelcol/config.yaml"]
     ports: ["4317:4317", "4318:4318"]
     environment:
@@ -100,7 +100,7 @@ services:
     depends_on: [tempo, prometheus]
 
   prometheus:
-    image: prom/prometheus:v3.5.0
+    image: prom/prometheus:v3.15.0
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
@@ -114,14 +114,14 @@ services:
       - prometheus-data:/prometheus
 
   alertmanager:
-    image: prom/alertmanager:v0.28.1
+    image: prom/alertmanager:v0.34.1
     command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
     ports: ["9093:9093"]
     volumes:
       - ./deploy/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
 
   tempo:
-    image: grafana/tempo:2.8.2
+    image: grafana/tempo:3.1.0
     command: ["-config.file=/etc/tempo/tempo.yaml"]
     # Simplificação de laboratório: root evita ajustar permissão do volume.
     user: "0"
@@ -131,13 +131,13 @@ services:
       - tempo-data:/var/tempo
 
   loki:
-    image: grafana/loki:3.5.3
+    image: grafana/loki:3.7.8
     command: ["-config.file=/etc/loki/local-config.yaml"]
     ports: ["3100:3100"]
     volumes: [loki-data:/loki]
 
   alloy:
-    image: grafana/alloy:v1.10.1
+    image: grafana/alloy:v1.20.1
     command:
       - run
       - --server.http.listen-addr=0.0.0.0:12345
@@ -150,13 +150,14 @@ services:
     depends_on: [loki]
 
   grafana:
-    image: grafana/grafana:12.1.1
+    image: grafana/grafana:13.2.3
     ports: ["3000:3000"]
     environment:
-      # Acesso anônimo como admin: só para laboratório local.
+      # Laboratório local: anônimo entra como Viewer (só dashboards);
+      # Explore e edição exigem login admin / lightpix.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
-      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: lightpix
     volumes:
       - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
@@ -175,7 +176,7 @@ services:
   # Métricas por container (CPU, memória, OOM). No Kubernetes, o papel é do
   # kubelet/cAdvisor + kube-state-metrics.
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.52.1
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
     privileged: true
     devices: ["/dev/kmsg"]
     command: ["--docker_only=true", "--housekeeping_interval=10s"]

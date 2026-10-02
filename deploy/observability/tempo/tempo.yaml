@@ -1,3 +1,5 @@
+# Tempo 3 em modo monolítico (target "all"): block-builder, live-store e
+# backend scheduler/worker no mesmo processo, sem Kafka.
 stream_over_http_enabled: true
 
 server:
@@ -10,10 +12,8 @@ distributor:
         grpc:
           endpoint: 0.0.0.0:4317
 
-ingester:
-  max_block_duration: 5m
-
-compactor:
+# Compactação e retenção são jobs do backend worker no Tempo 3.
+backend_worker:
   compaction:
     block_retention: 72h
 
@@ -28,8 +28,6 @@ metrics_generator:
     remote_write:
       - url: http://prometheus:9090/api/v1/write
         send_exemplars: true
-  traces_storage:
-    path: /var/tempo/generator/traces
 
 storage:
   trace:
@@ -42,4 +40,7 @@ storage:
 overrides:
   defaults:
     metrics_generator:
-      processors: [service-graphs, span-metrics, local-blocks]
+      processors: [service-graphs, span-metrics]
+
+usage_report:
+  reporting_enabled: false

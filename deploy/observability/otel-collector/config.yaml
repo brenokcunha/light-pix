@@ -37,13 +37,13 @@ processors:
           sampling_percentage: ${env:TRACE_SAMPLE_PERCENT:-100}
 
 exporters:
-  otlp/tempo:
+  otlp_grpc/tempo:
     endpoint: tempo:4317
     tls:
       insecure: true
 
   # Ingestão OTLP nativa do Prometheus 3 (--web.enable-otlp-receiver).
-  otlphttp/prometheus:
+  otlp_http/prometheus:
     endpoint: http://prometheus:9090/api/v1/otlp
     tls:
       insecure: true
@@ -61,8 +61,8 @@ service:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, tail_sampling, batch]
-      exporters: [otlp/tempo]
+      exporters: [otlp_grpc/tempo]
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [otlphttp/prometheus]
+      exporters: [otlp_http/prometheus]

@@ -20,7 +20,7 @@ Primeira subida baixa as imagens e inicializa o replica set do MongoDB.
 
 | Serviço | URL |
 |---|---|
-| Grafana (anônimo, admin) | http://localhost:3000 |
+| Grafana (anônimo vê dashboards; Explore com admin / lightpix) | http://localhost:3000 |
 | Prometheus | http://localhost:9090 |
 | Alertmanager | http://localhost:9093 |
 | RabbitMQ (lightpix / lightpix) | http://localhost:15672 |
