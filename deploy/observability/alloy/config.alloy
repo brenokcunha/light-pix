@@ -1,0 +1,80 @@
+// Coleta os logs dos containers do projeto light-pix e envia ao Loki.
+
+discovery.docker "compose" {
+  host = "unix:///var/run/docker.sock"
+
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=light-pix"]
+  }
+}
+
+discovery.relabel "compose" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service_name"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "compose" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.compose.targets
+  relabel_rules = discovery.relabel.compose.rules
+  forward_to    = [loki.process.pix.receiver]
+}
+
+loki.process "pix" {
+  // Logs JSON dos serviços Go. O nível vira label; trace_id e span_id viram
+  // structured metadata, porque têm cardinalidade alta demais para label.
+  stage.json {
+    expressions = {
+      level    = "level",
+      trace_id = "trace_id",
+      span_id  = "span_id",
+    }
+  }
+
+  stage.labels {
+    values = { level = "" }
+  }
+
+  stage.structured_metadata {
+    values = {
+      trace_id = "",
+      span_id  = "",
+    }
+  }
+
+  // Defesa em profundidade: mascara CPF e CNPJ que escaparem do mascaramento
+  // feito na origem (internal/telemetry).
+  stage.replace {
+    expression = `\b(\d{3}\.?\d{3}\.?\d{3}-?\d{2})\b`
+    replace    = "***CPF***"
+  }
+
+  stage.replace {
+    expression = `\b(\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2})\b`
+    replace    = "***CNPJ***"
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

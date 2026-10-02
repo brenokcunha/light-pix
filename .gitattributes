@@ -1,0 +1,2 @@
+# Configs são montadas em containers Linux: manter LF em qualquer SO.
+* text=auto eol=lf

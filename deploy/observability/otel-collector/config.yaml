@@ -1,0 +1,68 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 20
+
+  batch: {}
+
+  # Tail sampling: a decisão é tomada com o trace inteiro em mãos. Guarda 100%
+  # dos traces com erro ou lentos e só uma amostra dos normais. Em carga,
+  # reduza TRACE_SAMPLE_PERCENT para controlar o custo de armazenamento.
+  tail_sampling:
+    decision_wait: 15s
+    num_traces: 50000
+    decision_cache:
+      sampled_cache_size: 100000
+    policies:
+      - name: erros
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: lentos
+        type: latency
+        latency:
+          threshold_ms: 1500
+      - name: amostra
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: ${env:TRACE_SAMPLE_PERCENT:-100}
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  # Ingestão OTLP nativa do Prometheus 3 (--web.enable-otlp-receiver).
+  otlphttp/prometheus:
+    endpoint: http://prometheus:9090/api/v1/otlp
+    tls:
+      insecure: true
+
+service:
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, tail_sampling, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/prometheus]

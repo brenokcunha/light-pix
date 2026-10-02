@@ -1,0 +1,6 @@
+.git
+docs
+deploy
+loadtest
+scenarios
+*.md

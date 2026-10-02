@@ -1,0 +1,195 @@
+# light-pix — laboratório local. Credenciais são de desenvolvimento.
+name: light-pix
+
+x-otel-env: &otel-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_EXPORTER_OTLP_INSECURE: "true"
+  OTEL_METRIC_EXPORT_INTERVAL: "10000"
+
+x-psp: &psp
+  image: light-pix/psp:dev
+  build:
+    context: .
+    args:
+      CMD: psp
+  restart: unless-stopped
+  depends_on:
+    mongo:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+    otel-collector:
+      condition: service_started
+  healthcheck:
+    test: ["CMD", "/app", "healthcheck"]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+
+services:
+  # ---------------------------------------------------------------- PSPs
+  psp-a-api:
+    <<: *psp
+    command: ["api"]
+    ports: ["8081:8080"]
+    environment:
+      <<: *otel-env
+      OTEL_RESOURCE_ATTRIBUTES: psp.ispb=11111111,psp.name=psp-a,deployment.environment.name=local
+      PSP_ISPB: "11111111"
+      MONGO_URI: mongodb://mongo:27017/psp_a?replicaSet=rs0
+      RABBITMQ_URL: amqp://lightpix:lightpix@rabbitmq:5672/psp-a
+
+  psp-b-api:
+    <<: *psp
+    command: ["api"]
+    ports: ["8082:8080"]
+    environment:
+      <<: *otel-env
+      OTEL_RESOURCE_ATTRIBUTES: psp.ispb=22222222,psp.name=psp-b,deployment.environment.name=local
+      PSP_ISPB: "22222222"
+      MONGO_URI: mongodb://mongo:27017/psp_b?replicaSet=rs0
+      RABBITMQ_URL: amqp://lightpix:lightpix@rabbitmq:5672/psp-b
+
+  # ---------------------------------------------------------- Dados e fila
+  mongo:
+    image: mongo:8.0
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports: ["27017:27017"]
+    volumes: [mongo-data:/data/db]
+    # Inicia o replica set na primeira subida e só fica saudável com primário
+    # eleito (transações e change streams dependem disso).
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - >-
+          try { if (rs.status().myState !== 1) quit(1) }
+          catch (e) { rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'mongo:27017'}]}); quit(1) }
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+
+  rabbitmq:
+    image: rabbitmq:4.1-management
+    hostname: rabbitmq
+    ports: ["5672:5672", "15672:15672"]
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+      - ./deploy/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./deploy/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - ./deploy/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  # ------------------------------------------------------- Observabilidade
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.131.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    ports: ["4317:4317", "4318:4318"]
+    environment:
+      TRACE_SAMPLE_PERCENT: ${TRACE_SAMPLE_PERCENT:-100}
+    volumes:
+      - ./deploy/observability/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    depends_on: [tempo, prometheus]
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-otlp-receiver
+      - --web.enable-remote-write-receiver
+      - --web.enable-lifecycle
+      - --enable-feature=exemplar-storage
+    ports: ["9090:9090"]
+    volumes:
+      - ./deploy/observability/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    ports: ["9093:9093"]
+    volumes:
+      - ./deploy/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+
+  tempo:
+    image: grafana/tempo:2.8.2
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    # Simplificação de laboratório: root evita ajustar permissão do volume.
+    user: "0"
+    ports: ["3200:3200"]
+    volumes:
+      - ./deploy/observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+
+  loki:
+    image: grafana/loki:3.5.3
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports: ["3100:3100"]
+    volumes: [loki-data:/loki]
+
+  alloy:
+    image: grafana/alloy:v1.10.1
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    ports: ["12345:12345"]
+    volumes:
+      - ./deploy/observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on: [loki]
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    ports: ["3000:3000"]
+    environment:
+      # Acesso anônimo como admin: só para laboratório local.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on: [prometheus, tempo, loki]
+
+  # ------------------------------------------------------------ Exporters
+  mongodb-exporter:
+    image: percona/mongodb_exporter:0.53.0
+    command:
+      - --mongodb.uri=mongodb://mongo:27017/?directConnection=true
+      - --collect-all
+      - --compatible-mode
+    depends_on: [mongo]
+
+  # Métricas por container (CPU, memória, OOM). No Kubernetes, o papel é do
+  # kubelet/cAdvisor + kube-state-metrics.
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
+    privileged: true
+    devices: ["/dev/kmsg"]
+    command: ["--docker_only=true", "--housekeeping_interval=10s"]
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+
+volumes:
+  mongo-data:
+  rabbitmq-data:
+  prometheus-data:
+  tempo-data:
+  loki-data:
+  grafana-data:
