@@ -98,30 +98,60 @@ alerta).
 ## 5. Simuladores
 
 **spi-sim** — roteador entre participantes, inspirado na interface ICOM:
-- `POST /api/v1/in/{ispb}/msgs`: PSP envia `pacs.008`/`pacs.002`.
-- `GET /api/v1/out/{ispb}/stream`: long-polling das mensagens destinadas ao PSP.
-- `GET /api/v1/status/{endToEndId}`: consulta de situação (simplificação do `pacs.028`).
-- Liquidação contra a conta PI de cada participante (saldo mantido pelo bacen-sim):
-  saldo insuficiente → `RJCT AM04`; recebedor sem resposta no prazo → `RJCT`
-  para o pagador.
-- Deduplicação por `EndToEndId`.
+- `POST /api/v1/in/{ispb}/msgs`: PSP envia `pacs.008`/`pacs.002` (`AppHdr.Fr`
+  = ISPB do caminho, `AppHdr.To` = `00038166`). Responde `202`; o SPI reemite a
+  `pacs.008` para o recebedor com o próprio cabeçalho.
+- `GET /api/v1/out/{ispb}/stream?wait=<dur>`: long-polling. `200` com até 100
+  mensagens ou `204` no prazo; o header `PI-PULL-NEXT` traz a URL do próximo
+  pull, com `?ack=<lote>` para confirmar o lote recebido. Entrega
+  at-least-once: lote não confirmado volta a ser entregue quando o lease vence.
+- `GET /api/v1/status/{endToEndId}` com `PI-RequestingParticipant`: situação
+  (`PDNG`, `ACSP`, `ACSC`, `RJCT`), simplificação do `pacs.028`. Quem não
+  participa da transação recebe `404`.
+- Estados: `AWAITING_CREDITOR` → `SETTLING` → `SETTLED` | `REJECTED`, com
+  transições condicionais sobre o estado atual.
+  - Recebedor responde `RJCT` → pagador recebe `RJCT` com o motivo dele.
+  - Recebedor não responde no prazo (`SPI_CREDITOR_TIMEOUT`) → `RJCT AB03` para
+    os dois.
+  - Liquidação recusada pelo bacen-sim → `RJCT AM04` (saldo) ou `ED05` para os
+    dois; falha temporária deixa em `SETTLING` e a varredura tenta de novo.
+  - Liquidou → `ACSC` para os dois.
+- Deduplicação por `EndToEndId`: reenvio da mesma mensagem é aceito e
+  ignorado; o mesmo id em outra mensagem → `409 DUPLICATE_END_TO_END_ID`.
+- Extensão do laboratório: cada mensagem entregue carrega `traceContext`
+  (W3C `traceparent`) de quem a originou, para o trace seguir do pagador ao
+  recebedor através do SPI.
 
 **dict-sim** — diretório de chaves:
-- CRUD de vínculos (CPF, CNPJ, e-mail, celular, EVP) por participante.
-- `GET /api/v1/entries/{key}` com header do pagador e rate limit por token bucket
-  (anti-varredura, como no DICT real).
+- `POST /api/v1/entries`: registra vínculo (CPF, CNPJ, e-mail, celular E.164,
+  EVP gerado se vier vazio) de conta do próprio participante. Chave CPF/CNPJ
+  precisa ser o documento do titular; até 5 chaves por conta (PF) ou 20 (PJ);
+  chave já vinculada → `409` (portabilidade e reivindicação ficam fora).
+- `GET /api/v1/entries/{key}` com `PI-RequestingParticipant` e `PI-PayerId`
+  (CPF/CNPJ do pagador): token bucket por usuário pagador; chave inexistente
+  custa mais que encontrada (anti-varredura). Esgotado → `429` + `Retry-After`.
+- `DELETE /api/v1/entries/{key}`: só o participante dono.
+- Carga inicial em `deploy/sims/dict-seed.json` (Alice e Carol em A; Bob e
+  Dave em B, uma chave de cada tipo).
 - (fase MED) relatos de infração e pedidos de devolução.
 
 **bacen-sim** — reservas do participante e visão do regulador:
-- Conta PI/STR: saldo da conta PI por ISPB, aporte/retirada (transferência
-  STR ↔ PI) e extrato de lançamentos de liquidação, usado na reconciliação diária.
-- IGA: recebe os timestamps por transação (o SPI envia os seus; cada PSP envia
-  periodicamente `t0'`, `t6a` e equivalentes do recebedor em
+- `POST /api/v1/settlements` (chamado pelo spi-sim): débito e crédito nas
+  contas PI numa transação, débito condicionado ao saldo. Idempotente por
+  `EndToEndId` (`201` nova, `200` repetição); saldo insuficiente → `422 AM04`.
+- `GET /api/v1/pi-accounts/{ispb}`: saldo.
+- `POST /api/v1/pi-accounts/{ispb}/str-transfers`: aporte (`IN`) ou retirada
+  (`OUT`), idempotente por `transferId`.
+- `GET /api/v1/pi-accounts/{ispb}/statement?from&to&limit&after`: extrato
+  append-only paginado por cursor, usado na reconciliação diária. O saldo é
+  sempre a soma do extrato (o saldo inicial entra como aporte `seed`).
+- (F6) IGA: recebe os timestamps por transação (o SPI envia os seus; cada PSP
+  envia periodicamente `t0'`, `t6a` e equivalentes do recebedor em
   `POST /api/v1/iga/reports`), calcula os indicadores por janela
   (`GET /api/v1/iga/{ispb}`) e os expõe como métricas. Permite comparar o SLO
   interno do PSP com o que o regulador enxerga.
 
-**Injeção de falhas** — todos os simuladores expõem `/admin/faults` para
+**Injeção de falhas** (F5) — todos os simuladores expõem `/admin/faults` para
 configurar latência (fixa ou distribuição), taxa de erro HTTP, perda de
 `pacs.002`, timeout do recebedor e indisponibilidade total.
 
@@ -223,8 +253,11 @@ internal/clients   DICT, SPI, bacen (com retry e circuit breaker)
 internal/telemetry OTel, slog, mascaramento
 internal/httpx     servidor HTTP instrumentado, health checks, shutdown gracioso
 internal/config    leitura de variáveis de ambiente
+internal/sim       spi, dict e bacen (lógica dos simuladores)
+internal/app       esqueleto comum dos binários de simulador
 compose.yaml       stack local (raiz do repositório)
 deploy/rabbitmq    vhosts, usuário e plugins
+deploy/sims        carga inicial do dict-sim
 deploy/observability  otelcol, prometheus, alertmanager, tempo, loki, alloy, grafana
 deploy/slo         especificações Sloth e regras geradas
 loadtest           scripts k6

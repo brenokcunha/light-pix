@@ -1,4 +1,4 @@
-.PHONY: up down reset ps logs build test vet fmt
+.PHONY: up down reset ps logs build test test-integration vet fmt
 
 up: ## sobe a stack completa (rebuild das imagens Go)
 	docker compose up -d --build
@@ -20,6 +20,12 @@ build:
 
 test:
 	go test ./...
+
+# Usa o MongoDB da stack (make up); cada teste cria e apaga o próprio banco.
+LIGHTPIX_TEST_MONGO_URI ?= mongodb://localhost:27017/?directConnection=true
+
+test-integration: ## testes com MongoDB real
+	LIGHTPIX_TEST_MONGO_URI="$(LIGHTPIX_TEST_MONGO_URI)" go test -count=1 ./...
 
 vet:
 	go vet ./...

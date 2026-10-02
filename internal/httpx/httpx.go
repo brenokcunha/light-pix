@@ -93,6 +93,27 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// Error é o corpo padrão de erro das APIs do laboratório.
+type Error struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// WriteError responde com o corpo de erro padrão.
+func WriteError(w http.ResponseWriter, status int, code, msg string) {
+	WriteJSON(w, status, Error{Code: code, Message: msg})
+}
+
+// DecodeJSON lê o corpo (até 1 MiB) em v, rejeitando campos desconhecidos.
+func DecodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("corpo inválido: %w", err)
+	}
+	return nil
+}
+
 // Serve roda o servidor até o contexto ser cancelado e então drena as
 // requisições em andamento.
 func Serve(ctx context.Context, addr string, h http.Handler) error {

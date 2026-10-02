@@ -26,6 +26,19 @@ x-psp: &psp
     timeout: 5s
     retries: 3
 
+x-sim: &sim
+  restart: unless-stopped
+  depends_on:
+    mongo:
+      condition: service_healthy
+    otel-collector:
+      condition: service_started
+  healthcheck:
+    test: ["CMD", "/app", "healthcheck"]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+
 services:
   # ---------------------------------------------------------------- PSPs
   psp-a-api:
@@ -49,6 +62,57 @@ services:
       PSP_ISPB: "22222222"
       MONGO_URI: mongodb://mongo:27017/psp_b?replicaSet=rs0
       RABBITMQ_URL: amqp://lightpix:lightpix@rabbitmq:5672/psp-b
+
+  # ------------------------------------------------------- Simuladores
+  # Fazem o papel do BCB (SPI, DICT, contas PI). Cada um num banco próprio.
+  spi-sim:
+    <<: *sim
+    image: light-pix/spi-sim:dev
+    build: {context: ., args: {CMD: spi-sim}}
+    ports: ["8091:8080"]
+    depends_on:
+      mongo: {condition: service_healthy}
+      otel-collector: {condition: service_started}
+      bacen-sim: {condition: service_healthy}
+    environment:
+      <<: *otel-env
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=local
+      MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
+      MONGO_DB: spi
+      BACEN_URL: http://bacen-sim:8080
+      SPI_PARTICIPANTS: "11111111,22222222"
+      SPI_CREDITOR_TIMEOUT: 10s
+      SPI_POLL_WAIT: 20s
+      SPI_LEASE: 30s
+
+  dict-sim:
+    <<: *sim
+    image: light-pix/dict-sim:dev
+    build: {context: ., args: {CMD: dict-sim}}
+    ports: ["8092:8080"]
+    volumes: [./deploy/sims/dict-seed.json:/etc/dict-seed.json:ro]
+    environment:
+      <<: *otel-env
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=local
+      MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
+      MONGO_DB: dict
+      DICT_SEED_FILE: /etc/dict-seed.json
+      DICT_PAYER_BUCKET_CAPACITY: "100"
+      DICT_PAYER_REFILL_PER_MIN: "60"
+      DICT_NOT_FOUND_COST: "20"
+
+  bacen-sim:
+    <<: *sim
+    image: light-pix/bacen-sim:dev
+    build: {context: ., args: {CMD: bacen-sim}}
+    ports: ["8093:8080"]
+    environment:
+      <<: *otel-env
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=local
+      MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
+      MONGO_DB: bacen
+      # Saldo inicial das contas PI (aplicado só na primeira subida).
+      BACEN_PI_ACCOUNTS: "11111111:1000000.00,22222222:1000000.00"
 
   # ---------------------------------------------------------- Dados e fila
   mongo:
