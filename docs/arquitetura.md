@@ -113,13 +113,32 @@ acontece na liquidação: o `ACSC` que o SPI manda ao recebedor chega por
 tardio (prazo estourado) leva `ACCEPTED` → `REJECTED` sem mover dinheiro; um
 `RJCT` depois de `CREDITED` é ignorado.
 
-**pending-resolver** — job periódico que busca pagamentos/recebimentos em estado
-não terminal além de um limiar (ex.: `PENDING`/`SENT` > 40s, `ACCEPTED` sem
-liquidação), consulta o status no SPI e aplica o resultado pelo mesmo caminho do
-result-worker. Também reprocessa a DLQ com segurança (idempotência) e roda a
-reconciliação diária: compara o extrato da conta PI (bacen-sim) com o ledger
-interno e registra divergências (coleção `reconciliation_reports` + métrica e
-alerta).
+**pending-resolver** — três ciclos independentes, todos idempotentes (usam as
+mesmas escritas condicionais do caminho normal, então várias réplicas convivem):
+- *Pendências* (a cada `RESOLVER_INTERVAL`, 10s): pagamentos em estado não
+  terminal além de `RESOLVER_MIN_AGE` (40s) — enviados em `PENDING`/`SENT`,
+  recebidos em `ACCEPTED` — têm a situação consultada no SPI
+  (`GET /api/v1/status`) e o resultado aplicado pelo mesmo caminho do worker:
+  `ACSC` confirma/credita, `RJCT` rejeita, `ACSP`/`PDNG` espera. Se o SPI não
+  conhece a transação (404), nada é feito: reembolsar daqui arriscaria pagar duas
+  vezes se a mensagem ainda estiver na fila de retry. O gauge
+  `pix.payments.stuck` conta o que está parado.
+- *DLQs* (a cada `RESOLVER_DLQ_INTERVAL`, 1min): devolve à fila de origem as
+  mensagens das três DLQs, até `RESOLVER_MAX_REDRIVES` vezes cada (header
+  `x-redrive`); é seguro porque os consumidores são idempotentes. Depois disso a
+  mensagem é estacionada na coleção `dead_letters` (`GET /admin/dead-letters`).
+  Se for a `pacs.008` de um Pix enviado, o resolver pergunta ao SPI antes de
+  estacionar: se ele nunca a recebeu, o Pix é rejeitado (`ED05`) e a reserva
+  volta, porque a mensagem não vai mais sair; se recebeu, vale o que o SPI diz.
+- *Reconciliação* (diária, depois de `RECONCILE_AT`, 03:00 UTC, para o dia UTC
+  anterior; `POST /admin/reconciliation?from=&to=` roda na hora): compara as
+  liquidações do extrato da conta PI (bacen-sim) com os pagamentos `CONFIRMED` e
+  `CREDITED` do PSP, pelo `EndToEndId`, e grava o relatório em
+  `reconciliation_reports` (totais dos dois lados e divergências). Tipos:
+  `PI_ENTRY_WITHOUT_LOCAL_SETTLEMENT`, `LOCAL_SETTLEMENT_WITHOUT_PI_ENTRY`,
+  `AMOUNT_MISMATCH` e `DIRECTION_MISMATCH`. Métricas: `reconciliation.runs`,
+  `reconciliation.divergences{type}`, `reconciliation.last.divergences` e
+  `reconciliation.last.timestamp` (para alertar divergência e relatório atrasado).
 
 ## 5. Simuladores
 
@@ -200,8 +219,8 @@ configurar latência (fixa ou distribuição), taxa de erro HTTP, perda de
 | Falha | Tratamento |
 |---|---|
 | Mensagem duplicada (relay/rabbit) | escrita condicional por `EndToEndId`; consumidor descarta |
-| SPI fora / 5xx | retry com backoff via filas TTL; esgotou → DLQ + alerta |
-| `pacs.002` perdida | pending-resolver consulta status no SPI |
+| SPI fora / 5xx | retry com backoff via filas TTL; esgotou → DLQ; o resolver devolve da DLQ e, no limite, estaciona e rejeita se o SPI nunca viu a transação |
+| `pacs.002` perdida | pending-resolver consulta status no SPI (enviado e recebido) |
 | DICT lento/fora | timeout + circuit breaker; falha rápida para o cliente |
 | Saldo insuficiente | rejeição síncrona na API (transação não comita) |
 | Crash entre gravar e publicar | outbox + resume token garantem a publicação |
@@ -224,6 +243,8 @@ reprocessar um evento antigo nunca regride um pagamento.
 | `idempotency_keys` | (conta, `Idempotency-Key`) → `EndToEndId` + hash do pedido | único (conta, chave), TTL 24h |
 | `outbox` | rota, `messageId`, corpo JSON, `traceContext`, `createdAt`, `publishedAt` | `publishedAt` (TTL 24h só nos publicados) |
 | `relay_checkpoints` | resume token do change stream | — |
+| `dead_letters` | mensagens que esgotaram os reenvios da DLQ (fila, corpo, último erro) | — |
+| `reconciliation_reports` | relatório de cada reconciliação (janela, totais, divergências) | (gatilho, início da janela); `createdAt` |
 
 ## 9. Mensageria (RabbitMQ, um vhost por PSP)
 
@@ -231,12 +252,17 @@ reprocessar um evento antigo nunca regride um pagamento.
 - Quorum queues: `spi.out`, `pix.results`, `pix.incoming`, cada uma com
   `x-delivery-limit` (10) e DLQ (`*.dlq`, via `pix.dlx`). Cada processo declara
   a topologia ao subir (idempotente).
-- Consumidores com ack manual: erro transitório espera `RETRY_DELAY` e devolve a
-  mensagem à fila (nack com requeue); mensagem malformada vai direto à DLQ; ao
-  estourar o limite de entregas a fila a manda à DLQ.
-- Retry com backoff (F4): filas `*.retry.{5s,30s,2m}` com TTL que devolvem para a fila de origem.
+- Consumidores com ack manual. Falha transitória: a mensagem é republicada (com
+  confirm) na fila de espera da tentativa seguinte, `<fila>.retry.5s`, `.30s` e
+  `.2m` (`RETRY_DELAYS`), e confirmada na original; filas de espera são quorum
+  queues com `x-message-ttl` e dead-letter para a fila de origem, então a
+  mensagem volta sozinha com `x-attempt` incrementado. Esgotadas as tentativas,
+  ou em erro permanente (mensagem malformada), vai para a DLQ com o último erro
+  em `x-last-error`. O `x-delivery-limit` da fila só serve de rede de segurança
+  caso nem a republicação funcione (nack com requeue).
+- DLQ: quem a esvazia é o pending-resolver (ver acima).
 - Headers: `traceparent`, `x-enqueued-at` (idade da mensagem, vira a métrica
-  `broker.message.age`); `x-attempt` chega com o retry da F4.
+  `broker.message.age`); `x-attempt`, `x-last-error`, `x-source-queue` e `x-redrive` controlam retry e DLQ.
 
 ## 10. Observabilidade
 

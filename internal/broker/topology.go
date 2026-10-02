@@ -2,6 +2,7 @@ package broker
 
 import (
 	"fmt"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -9,26 +10,55 @@ import (
 // Nomes da topologia de cada PSP (um vhost por PSP).
 const (
 	ExchangePix = "pix"     // topic: roteia pelo nome da fila
-	ExchangeDLX = "pix.dlx" // direct: recebe o que a fila rejeita
+	ExchangeDLX = "pix.dlx" // direct: recebe o que vai para a DLQ
 
 	QueueSPIOut   = "spi.out"      // mensagens do PSP para o SPI (pacs.008, pacs.002)
 	QueueResults  = "pix.results"  // pacs.002 vindas do SPI
 	QueueIncoming = "pix.incoming" // pacs.008 vindas do SPI
 
-	// DeliveryLimit é quantas vezes uma mensagem volta à fila (nack com
-	// requeue) antes de a quorum queue mandá-la à DLQ.
+	// DeliveryLimit é uma rede de segurança: quantas vezes uma mensagem pode
+	// voltar à fila (nack com requeue, só em falha do próprio retry) antes de
+	// a quorum queue mandá-la à DLQ.
 	DeliveryLimit = 10
 )
 
-// Queues lista as filas de trabalho; cada uma tem a DLQ "<fila>.dlq".
+// DefaultRetryDelays são as esperas entre as tentativas de uma mensagem que
+// falhou: 5s, 30s e 2min. Esgotadas, a mensagem vai para a DLQ.
+var DefaultRetryDelays = []time.Duration{5 * time.Second, 30 * time.Second, 2 * time.Minute}
+
+// Queues lista as filas de trabalho; cada uma tem a DLQ "<fila>.dlq" e as
+// filas de retry "<fila>.retry.<espera>".
 var Queues = []string{QueueSPIOut, QueueResults, QueueIncoming}
 
 // DLQ devolve o nome da fila de mensagens mortas de queue.
 func DLQ(queue string) string { return queue + ".dlq" }
 
+// RetryQueue devolve a fila de espera de queue para o atraso d (ex.:
+// "pix.results.retry.30s"). A mensagem fica nela até o TTL vencer e então
+// volta sozinha para queue.
+func RetryQueue(queue string, d time.Duration) string {
+	return queue + ".retry." + delayLabel(d)
+}
+
+func delayLabel(d time.Duration) string {
+	switch {
+	case d%time.Minute == 0:
+		return fmt.Sprintf("%dm", d/time.Minute)
+	case d%time.Second == 0:
+		return fmt.Sprintf("%ds", d/time.Second)
+	default:
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+}
+
 // DeclareTopology declara exchanges, filas e bindings. É idempotente, então
-// cada processo pode chamá-la ao subir, em qualquer ordem.
-func DeclareTopology(ch *amqp.Channel) error {
+// cada processo pode chamá-la ao subir, em qualquer ordem. delays define as
+// filas de retry; vazio usa DefaultRetryDelays. Todos os processos de um
+// mesmo vhost devem usar os mesmos delays.
+func DeclareTopology(ch *amqp.Channel, delays []time.Duration) error {
+	if len(delays) == 0 {
+		delays = DefaultRetryDelays
+	}
 	if err := ch.ExchangeDeclare(ExchangePix, "topic", true, false, false, false, nil); err != nil {
 		return fmt.Errorf("broker: exchange %s: %w", ExchangePix, err)
 	}
@@ -53,16 +83,28 @@ func DeclareTopology(ch *amqp.Channel) error {
 		if err := ch.QueueBind(q, q, ExchangePix, false, nil); err != nil {
 			return fmt.Errorf("broker: bind %s: %w", q, err)
 		}
+		// Fila de espera: sem consumidor; ao vencer o TTL a mensagem é
+		// dead-lettered para o exchange pix com a chave da fila de origem.
+		for _, d := range delays {
+			if _, err := ch.QueueDeclare(RetryQueue(q, d), true, false, false, false, amqp.Table{
+				"x-queue-type":              "quorum",
+				"x-message-ttl":             d.Milliseconds(),
+				"x-dead-letter-exchange":    ExchangePix,
+				"x-dead-letter-routing-key": q,
+			}); err != nil {
+				return fmt.Errorf("broker: fila %s: %w", RetryQueue(q, d), err)
+			}
+		}
 	}
 	return nil
 }
 
-// Declare abre um canal só para declarar a topologia.
-func Declare(conn *amqp.Connection) error {
+// Declare abre um canal só para declarar a topologia (ver DeclareTopology).
+func Declare(conn *amqp.Connection, delays ...time.Duration) error {
 	ch, err := conn.Channel()
 	if err != nil {
 		return fmt.Errorf("broker: abrir canal: %w", err)
 	}
 	defer ch.Close()
-	return DeclareTopology(ch)
+	return DeclareTopology(ch, delays)
 }

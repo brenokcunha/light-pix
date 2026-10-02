@@ -32,11 +32,32 @@ func (c tableCarrier) Keys() []string {
 	return keys
 }
 
+// Headers de controle do retry e da DLQ.
+const (
+	HeaderAttempt     = "x-attempt"      // quantas vezes a mensagem já falhou
+	HeaderLastError   = "x-last-error"   // erro da última falha
+	HeaderSourceQueue = "x-source-queue" // fila de onde a mensagem veio, na DLQ
+	HeaderRedrive     = "x-redrive"      // quantas vezes saiu da DLQ de volta à fila
+)
+
+// ExtractContext devolve ctx com o contexto de trace que veio nos headers.
+func ExtractContext(ctx context.Context, headers amqp.Table) context.Context {
+	return otel.GetTextMapPropagator().Extract(ctx, tableCarrier(headers))
+}
+
+// HeaderInt lê um header numérico (0 se ausente), seja qual for o tipo
+// inteiro com que o broker o devolveu.
+func HeaderInt(headers amqp.Table, key string) int {
+	n, _ := strconv.Atoi(fmt.Sprint(headers[key]))
+	return n
+}
+
 // Message é o que se publica.
 type Message struct {
-	ID        string    // MessageId AMQP (ex.: identificador da mensagem ISO)
-	Body      []byte    // JSON
-	EnqueueAt time.Time // quando a mensagem nasceu; zero = agora
+	ID        string     // MessageId AMQP (ex.: identificador da mensagem ISO)
+	Body      []byte     // JSON
+	EnqueueAt time.Time  // quando a mensagem nasceu; zero = agora
+	Headers   amqp.Table // headers adicionais (controle de retry e DLQ)
 }
 
 // Publisher publica com publisher confirms: Publish só volta depois que o
@@ -64,13 +85,18 @@ func NewPublisher(conn *amqp.Connection) (*Publisher, error) {
 func (p *Publisher) Close() error { return p.ch.Close() }
 
 // Publish envia m ao exchange com a chave de roteamento, propagando o
-// contexto de trace de ctx nos headers (traceparent).
+// contexto de trace de ctx nos headers (traceparent). Com exchange vazio, a
+// mensagem vai direto para a fila de nome igual à chave.
 func (p *Publisher) Publish(ctx context.Context, exchange, key string, m Message) error {
 	enqueued := m.EnqueueAt
 	if enqueued.IsZero() {
 		enqueued = time.Now()
 	}
-	headers := amqp.Table{HeaderEnqueuedAt: strconv.FormatInt(enqueued.UnixMilli(), 10)}
+	headers := amqp.Table{}
+	for k, v := range m.Headers {
+		headers[k] = v
+	}
+	headers[HeaderEnqueuedAt] = strconv.FormatInt(enqueued.UnixMilli(), 10)
 	otel.GetTextMapPropagator().Inject(ctx, tableCarrier(headers))
 
 	p.mu.Lock()

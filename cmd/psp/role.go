@@ -31,6 +31,8 @@ type role struct {
 	svc    *psp.Service
 	dict   *clients.Dict
 	mux    *http.ServeMux
+	// retryDelays são as esperas do retry das filas (RETRY_DELAYS).
+	retryDelays []time.Duration
 }
 
 // runRole monta o ambiente comum a todos os papéis: telemetria, MongoDB,
@@ -60,6 +62,11 @@ func runRole(ctx context.Context, service string, setup func(ctx context.Context
 		return err
 	}
 
+	delays, err := retryDelays()
+	if err != nil {
+		return err
+	}
+
 	startCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	client, err := store.Connect(startCtx, mongoURI)
@@ -72,7 +79,7 @@ func runRole(ctx context.Context, service string, setup func(ctx context.Context
 		return err
 	}
 	defer rabbit.Close()
-	if err := broker.Declare(rabbit); err != nil {
+	if err := broker.Declare(rabbit, delays...); err != nil {
 		return err
 	}
 
@@ -87,7 +94,7 @@ func runRole(ctx context.Context, service string, setup func(ctx context.Context
 		return err
 	}
 
-	r := &role{ispb: ispb, client: client, db: db, rabbit: rabbit, store: st, svc: svc, dict: dict, mux: http.NewServeMux()}
+	r := &role{ispb: ispb, client: client, db: db, rabbit: rabbit, store: st, svc: svc, dict: dict, mux: http.NewServeMux(), retryDelays: delays}
 	httpx.HandleHealth(r.mux, map[string]httpx.Check{
 		"mongodb":  func(ctx context.Context) error { return store.Ping(ctx, client) },
 		"rabbitmq": func(context.Context) error { return rabbitAlive(rabbit) },
@@ -97,6 +104,24 @@ func runRole(ctx context.Context, service string, setup func(ctx context.Context
 		return err
 	}
 	return app.Run(ctx, service, r.mux, nil, run)
+}
+
+// retryDelays lê RETRY_DELAYS (ex.: "5s,30s,2m"): a espera antes de cada
+// nova tentativa de uma mensagem que falhou.
+func retryDelays() ([]time.Duration, error) {
+	items := config.List("RETRY_DELAYS", "")
+	if len(items) == 0 {
+		return broker.DefaultRetryDelays, nil
+	}
+	delays := make([]time.Duration, len(items))
+	for i, it := range items {
+		d, err := time.ParseDuration(it)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("config: RETRY_DELAYS inválida: %q", it)
+		}
+		delays[i] = d
+	}
+	return delays, nil
 }
 
 func dictConfig() (clients.DictConfig, error) {

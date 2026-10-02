@@ -24,10 +24,6 @@ func runConnector(ctx context.Context) error {
 		if err != nil {
 			return nil, err
 		}
-		retryDelay, err := config.Duration("RETRY_DELAY", time.Second)
-		if err != nil {
-			return nil, err
-		}
 		concurrency, err := config.Float("WORKER_CONCURRENCY", 4)
 		if err != nil {
 			return nil, err
@@ -44,7 +40,7 @@ func runConnector(ctx context.Context) error {
 			return runAll(ctx,
 				func(ctx context.Context) error {
 					return broker.Consume(ctx, r.rabbit, broker.ConsumeConfig{
-						Queue: broker.QueueSPIOut, Concurrency: int(concurrency), RetryDelay: retryDelay,
+						Queue: broker.QueueSPIOut, Concurrency: int(concurrency), RetryDelays: r.retryDelays,
 					}, conn.HandleOut)
 				},
 				conn.Pull,

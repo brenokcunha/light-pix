@@ -28,6 +28,10 @@ type Store struct {
 	payments *mongo.Collection
 	idem     *mongo.Collection
 	outbox   *mongo.Collection
+	// deadLetters guarda mensagens que esgotaram os reenvios da DLQ.
+	deadLetters *mongo.Collection
+	// reports guarda os relatórios de reconciliação.
+	reports *mongo.Collection
 }
 
 // NewStore prepara as coleções e cria os índices.
@@ -39,6 +43,9 @@ func NewStore(ctx context.Context, client *mongo.Client, db *mongo.Database) (*S
 		payments: db.Collection("payments"),
 		idem:     db.Collection("idempotency_keys"),
 		outbox:   outbox.Collection(db),
+
+		deadLetters: db.Collection("dead_letters"),
+		reports:     db.Collection("reconciliation_reports"),
 	}
 	idx := []struct {
 		coll   *mongo.Collection
@@ -58,6 +65,10 @@ func NewStore(ctx context.Context, client *mongo.Client, db *mongo.Database) (*S
 		{s.idem, []mongo.IndexModel{
 			{Keys: bson.D{{Key: "scope", Value: 1}, {Key: "key", Value: 1}}, Options: options.Index().SetUnique(true)},
 			{Keys: bson.D{{Key: "createdAt", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(int32(idempotencyTTL.Seconds()))},
+		}},
+		{s.reports, []mongo.IndexModel{
+			{Keys: bson.D{{Key: "trigger", Value: 1}, {Key: "from", Value: 1}}},
+			{Keys: bson.D{{Key: "createdAt", Value: -1}}},
 		}},
 	}
 	for _, i := range idx {

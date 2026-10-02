@@ -26,6 +26,7 @@ Primeira subida baixa as imagens e inicializa o replica set do MongoDB.
 | RabbitMQ (lightpix / lightpix) | http://localhost:15672 |
 | psp-a payment-api (ISPB 11111111; também sobem relay, connector e worker) | http://localhost:8081 |
 | psp-b payment-api (ISPB 22222222; idem) | http://localhost:8082 |
+| resolver do psp-a / psp-b (API administrativa) | http://localhost:8083 / http://localhost:8084 |
 | spi-sim | http://localhost:8091 |
 | dict-sim | http://localhost:8092 |
 | bacen-sim (contas PI começam com R$ 1.000.000,00) | http://localhost:8093 |
@@ -57,6 +58,22 @@ O mesmo `endToEndId` consultado no PSP B (`localhost:8082`) mostra o recebimento
 (`RECEIVED` → `ACCEPTED` → `CREDITED`), e `GET /v1/accounts/0001/2000001` mostra
 o saldo de Bob já creditado.
 
+## Resolver e reconciliação
+
+O resolver de cada PSP resolve pagamentos parados consultando o SPI, devolve
+mensagens das DLQs e concilia a conta PI com o PSP. Para conciliar na hora o dia
+de hoje (UTC) no PSP A:
+
+```bash
+curl -s -X POST "http://localhost:8083/admin/reconciliation?from=$(date -u +%Y-%m-%dT00:00:00Z)&to=$(date -u -d tomorrow +%Y-%m-%dT00:00:00Z)"
+```
+
+O relatório lista as divergências por `EndToEndId`. `GET /admin/reconciliation`
+devolve o último relatório e `GET /admin/dead-letters` as mensagens estacionadas.
+Para ver o retry em ação, `docker compose stop spi-sim`, faça um Pix, espere uns
+segundos e `docker compose start spi-sim`: o Pix fica `PENDING` e se completa
+sozinho nas tentativas seguintes.
+
 ## Conferir os sinais
 
 ```bash
@@ -79,7 +96,8 @@ curl http://localhost:8081/readyz
 | `LOG_LEVEL` | serviços Go | `debug`, `info`, `warn`, `error` |
 | `SPI_*`, `DICT_*`, `BACEN_PI_ACCOUNTS` | `compose.yaml` (simuladores) | prazo do recebedor, long-poll e lease do SPI; rate limit do DICT; saldos iniciais das contas PI |
 | `DICT_TIMEOUT`, `DICT_ATTEMPTS`, `DICT_CACHE_TTL` | serviços do PSP | timeout por tentativa (800ms), tentativas por consulta (3) e cache de chaves (10s; `0` desliga) |
-| `RETRY_DELAY`, `WORKER_CONCURRENCY` | connector e worker | espera antes de devolver à fila uma mensagem que falhou (1s) e mensagens em paralelo (4) |
+| `RETRY_DELAYS`, `WORKER_CONCURRENCY` | serviços do PSP | esperas entre as tentativas de uma mensagem que falhou (`5s,30s,2m`; depois vai à DLQ) e mensagens em paralelo (4) |
+| `RESOLVER_INTERVAL`, `RESOLVER_MIN_AGE`, `RESOLVER_DLQ_INTERVAL`, `RESOLVER_MAX_REDRIVES`, `RECONCILE_AT` | resolver | período das pendências (10s), tempo parado para consultar o SPI (40s), período das DLQs (1m), voltas pela DLQ antes de estacionar (3), horário UTC da reconciliação diária (`03:00`; vazio desliga) |
 
 ## Comandos
 

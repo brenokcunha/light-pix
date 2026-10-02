@@ -22,12 +22,13 @@ var commands = map[string]func(context.Context) error{
 	"relay":       runRelay,
 	"connector":   runConnector,
 	"worker":      runWorker,
+	"resolver":    runResolver,
 	"healthcheck": runHealthcheck,
 }
 
 func main() {
 	if len(os.Args) < 2 || commands[os.Args[1]] == nil {
-		fmt.Fprintln(os.Stderr, "uso: psp <api|relay|connector|worker|healthcheck>")
+		fmt.Fprintln(os.Stderr, "uso: psp <api|relay|connector|worker|resolver|healthcheck>")
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

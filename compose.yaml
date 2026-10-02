@@ -93,6 +93,20 @@ services:
     environment:
       <<: *psp-a-env
 
+  # Resolve pendências pelo status do SPI, reprocessa as DLQs e concilia a conta
+  # PI (diária às 03:00 UTC; POST /admin/reconciliation roda na hora).
+  psp-a-resolver:
+    <<: *psp
+    command: ["resolver"]
+    ports: ["8083:8080"]
+    environment:
+      <<: *psp-a-env
+      SPI_URL: http://spi-sim:8080
+      BACEN_URL: http://bacen-sim:8080
+      RESOLVER_INTERVAL: 10s
+      RESOLVER_MIN_AGE: 40s
+      RECONCILE_AT: "03:00"
+
   # PSP B (ISPB 22222222): um serviço por papel, todos com a mesma imagem
   psp-b-api:
     <<: *psp
@@ -122,6 +136,20 @@ services:
     command: ["worker"]
     environment:
       <<: *psp-b-env
+
+  # Resolve pendências pelo status do SPI, reprocessa as DLQs e concilia a conta
+  # PI (diária às 03:00 UTC; POST /admin/reconciliation roda na hora).
+  psp-b-resolver:
+    <<: *psp
+    command: ["resolver"]
+    ports: ["8084:8080"]
+    environment:
+      <<: *psp-b-env
+      SPI_URL: http://spi-sim:8080
+      BACEN_URL: http://bacen-sim:8080
+      RESOLVER_INTERVAL: 10s
+      RESOLVER_MIN_AGE: 40s
+      RECONCILE_AT: "03:00"
 
   # ------------------------------------------------------- Simuladores
   # Fazem o papel do BCB (SPI, DICT, contas PI). Cada um num banco próprio.

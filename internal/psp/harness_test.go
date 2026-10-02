@@ -6,8 +6,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,7 +56,9 @@ func TestMain(m *testing.M) {
 // RabbitMQ reais (um banco e um vhost exclusivos por componente).
 type world struct {
 	t     *testing.T
-	spi   string // URL do spi-sim
+	spi   string // URL do spi-sim, atrás do proxy de falhas
+	proxy *spiProxy
+	opts  worldOpts
 	dict  string // URL do dict-sim
 	bacen *clients.Bacen
 	nodes map[string]*node
@@ -62,6 +68,38 @@ type worldOpts struct {
 	creditorTimeout time.Duration
 	// roles de cada PSP que NÃO sobem (para simular componentes fora do ar).
 	skip map[string]map[string]bool // ispb → papel (relay, connector, worker)
+	// resolver sobe o pending-resolver (ciclos curtos) em cada PSP.
+	resolver bool
+	// reconcileAt liga a reconciliação diária do resolver ("HH:MM" UTC).
+	reconcileAt string
+}
+
+// testDelays são as esperas do retry nos testes (na produção: 5s, 30s, 2min).
+var testDelays = []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond}
+
+// spiProxy fica na frente do spi-sim e injeta falhas: failPosts é quantos
+// envios de mensagem ainda devem receber 503.
+type spiProxy struct {
+	next      http.Handler
+	failPosts atomic.Int32
+}
+
+func (p *spiProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/in/") {
+		for {
+			n := p.failPosts.Load()
+			if n <= 0 {
+				break
+			}
+			if p.failPosts.CompareAndSwap(n, n-1) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"code":"UNAVAILABLE","message":"SPI fora do ar (injetado)"}`))
+				return
+			}
+		}
+	}
+	p.next.ServeHTTP(w, r)
 }
 
 func newWorld(t *testing.T, opts worldOpts) *world {
@@ -70,7 +108,7 @@ func newWorld(t *testing.T, opts worldOpts) *world {
 		opts.creditorTimeout = 10 * time.Second
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &world{t: t, nodes: map[string]*node{}}
+	w := &world{t: t, nodes: map[string]*node{}, opts: opts}
 	var sims sync.WaitGroup
 	servers := []*httptest.Server{}
 	serve := func(register func(*http.ServeMux)) string {
@@ -107,7 +145,15 @@ func newWorld(t *testing.T, opts worldOpts) *world {
 		Lease: 2 * time.Second, SweepInterval: 100 * time.Millisecond, SettleRetry: 500 * time.Millisecond, Settler: w.bacen,
 	})
 	must(t, err)
-	w.spi = serve(s.Routes)
+	spiMux := http.NewServeMux()
+	s.Routes(spiMux)
+	realSPI := httptest.NewServer(otelhttp.NewHandler(spiMux, "sim"))
+	servers = append(servers, realSPI)
+	target, _ := url.Parse(realSPI.URL)
+	w.proxy = &spiProxy{next: httputil.NewSingleHostReverseProxy(target)}
+	front := httptest.NewServer(w.proxy)
+	servers = append(servers, front)
+	w.spi = front.URL
 	sims.Go(func() { _ = s.Run(ctx) })
 
 	for _, ispb := range []string{ispbA, ispbB} {
@@ -137,6 +183,9 @@ type node struct {
 	svc    *psp.Service
 	store  *psp.Store
 	spi    *clients.SPI
+	// resolver existe sempre (para chamar Reconcile e ResolvePending nos
+	// testes); só roda em segundo plano com worldOpts.resolver.
+	resolver *psp.Resolver
 
 	ctx context.Context
 	wg  sync.WaitGroup
@@ -148,7 +197,7 @@ func (w *world) newNode(parent context.Context, ispb string, skip map[string]boo
 	rabbitURL := testutil.RabbitMQ(t)
 	conn, err := broker.Dial(parent, rabbitURL)
 	must(t, err)
-	must(t, broker.Declare(conn))
+	must(t, broker.Declare(conn, testDelays...))
 
 	st, err := psp.NewStore(parent, client, client.Database(dbName))
 	must(t, err)
@@ -164,10 +213,18 @@ func (w *world) newNode(parent context.Context, ispb string, skip map[string]boo
 	n := &node{w: w, ispb: ispb, apiURL: srv.URL, client: client, db: dbName, conn: conn, svc: svc, store: st,
 		spi: clients.NewSPI(w.spi, 5*time.Second)}
 	n.ctx = parent // cancelado junto com o mundo
+	n.resolver, err = psp.NewResolver(svc, n.spi, w.bacen, conn, psp.ResolverConfig{
+		Interval: 200 * time.Millisecond, MinAge: time.Second, DLQInterval: 400 * time.Millisecond,
+		MaxRedrives: 3, ReconcileAt: w.opts.reconcileAt,
+	})
+	must(t, err)
 	for role, start := range map[string]func(){"relay": n.startRelay, "connector": n.startConnector, "worker": n.startWorker} {
 		if !skip[role] {
 			start()
 		}
+	}
+	if w.opts.resolver {
+		n.run(n.resolver.Run)
 	}
 	t.Cleanup(func() {
 		srv.Close()
@@ -200,18 +257,56 @@ func (n *node) startConnector() {
 	must(n.w.t, err)
 	c := psp.NewConnector(n.ispb, n.svc, n.spi, pub, time.Second)
 	n.run(func(ctx context.Context) error {
-		return broker.Consume(ctx, n.conn, broker.ConsumeConfig{Queue: broker.QueueSPIOut, Concurrency: 2, RetryDelay: 100 * time.Millisecond}, c.HandleOut)
+		return broker.Consume(ctx, n.conn, broker.ConsumeConfig{Queue: broker.QueueSPIOut, Concurrency: 2, RetryDelays: testDelays}, c.HandleOut)
 	})
 	n.run(c.Pull)
 }
 
 func (n *node) startWorker() {
+	n.startResults()
+	n.startIncoming()
+}
+
+func (n *node) startResults() {
 	n.run(func(ctx context.Context) error {
-		return broker.Consume(ctx, n.conn, broker.ConsumeConfig{Queue: broker.QueueResults, Concurrency: 2, RetryDelay: 100 * time.Millisecond}, n.svc.HandleResult)
+		return broker.Consume(ctx, n.conn, broker.ConsumeConfig{Queue: broker.QueueResults, Concurrency: 2, RetryDelays: testDelays}, n.svc.HandleResult)
 	})
+}
+
+func (n *node) startIncoming() {
 	n.run(func(ctx context.Context) error {
-		return broker.Consume(ctx, n.conn, broker.ConsumeConfig{Queue: broker.QueueIncoming, Concurrency: 2, RetryDelay: 100 * time.Millisecond}, n.svc.HandleIncoming)
+		return broker.Consume(ctx, n.conn, broker.ConsumeConfig{Queue: broker.QueueIncoming, Concurrency: 2, RetryDelays: testDelays}, n.svc.HandleIncoming)
 	})
+}
+
+// queueDepth devolve quantas mensagens estão prontas na fila do PSP.
+func (n *node) queueDepth(queue string) int {
+	n.w.t.Helper()
+	ch, err := n.conn.Channel()
+	must(n.w.t, err)
+	defer ch.Close()
+	q, err := ch.QueueDeclarePassive(queue, true, false, false, false, nil)
+	must(n.w.t, err)
+	return q.Messages
+}
+
+// purge apaga as mensagens da fila (simula mensagens perdidas).
+func (n *node) purge(queue string) {
+	n.w.t.Helper()
+	ch, err := n.conn.Channel()
+	must(n.w.t, err)
+	defer ch.Close()
+	_, err = ch.QueuePurge(queue, false)
+	must(n.w.t, err)
+}
+
+// publish coloca um corpo qualquer na fila, como se viesse do SPI.
+func (n *node) publish(queue string, body []byte) {
+	n.w.t.Helper()
+	pub, err := broker.NewPublisher(n.conn)
+	must(n.w.t, err)
+	defer pub.Close()
+	must(n.w.t, pub.Publish(context.Background(), broker.ExchangePix, queue, broker.Message{ID: "manual", Body: body}))
 }
 
 // --- chamadas HTTP e consultas -------------------------------------------------
