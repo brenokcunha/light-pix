@@ -28,6 +28,7 @@ Onde olhar primeiro:
 | [Circuit breaker do DICT aberto](dict-breaker.md) | DictCircuitBreakerOpen | 4 |
 | [Divergência na reconciliação da conta PI](reconciliation-divergence.md) | ReconciliationDivergence, ReconciliationStale | 2, 3 |
 | [Liquidez da conta PI](pi-liquidity.md) | PILiquidityLow, PixRejectedForLiquidity | 5 |
+| [Relato de infração (MED) fora do prazo](med-infraction.md) | InfractionAnalysisOverdue | — |
 | [Contêiner morto por memória ou reiniciando](container-oomkilled.md) | ContainerOOMKilled, ContainerRestartedNearMemoryLimit, ContainerRestarting, ContainerMemoryNearLimit | 1 |
 | [Alvo de monitoramento fora do ar](target-down.md) | TargetDown | — |
 

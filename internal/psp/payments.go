@@ -54,6 +54,9 @@ type Service struct {
 	keys  KeyResolver
 	// ReturnWindow é o prazo para devolver um Pix recebido (padrão: 90 dias).
 	ReturnWindow time.Duration
+	// InfractionWindow é o prazo para relatar um Pix como infração (padrão: 80 dias).
+	InfractionWindow time.Duration
+	med              MEDGateway
 
 	tracer   trace.Tracer
 	created  metric.Int64Counter
@@ -62,7 +65,8 @@ type Service struct {
 	duration metric.Float64Histogram
 	// returnsFinished conta devoluções encerradas; ficam fora das métricas de Pix
 	// para não entrar nos SLOs.
-	returnsFinished metric.Int64Counter
+	returnsFinished  metric.Int64Counter
+	infractionEvents metric.Int64Counter
 }
 
 // NewService cria o serviço do PSP identificado por ispb.
@@ -87,6 +91,10 @@ func NewService(ispb string, st *Store, keys KeyResolver) (*Service, error) {
 	}
 	if s.returnsFinished, err = meter.Int64Counter("pix.returns.finished",
 		metric.WithDescription("Devoluções que chegaram a um estado final, por sentido, estado e motivo")); err != nil {
+		return nil, err
+	}
+	if s.infractionEvents, err = meter.Int64Counter("med.infractions",
+		metric.WithDescription("Mudanças de estado dos relatos de infração (MED), por papel e estado")); err != nil {
 		return nil, err
 	}
 	s.duration, err = meter.Float64Histogram("pix.payment.duration", metric.WithUnit("s"),

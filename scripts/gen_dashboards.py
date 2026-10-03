@@ -274,6 +274,11 @@ def servicos():
     p.append(ts("Circuit breaker do DICT", [target('max by (psp_ispb) (resilience_breaker_state{breaker="dict"})', "{{psp_ispb}}")],
                 16, y, 8, unit="none", min_=0, max_=2, desc="0 fechado, 1 meio-aberto, 2 aberto."))
     y += 8
+    p.append(ts("Relatos de infração (MED): mudanças de estado e atrasados", [
+        target('sum by (role, state) (increase(med_infractions_total[5m]))', "{{role}} → {{state}}", "A"),
+        target('sum by (role) (med_infractions_overdue)', "atrasados {{role}}", "B")],
+        0, y, 24, 6, unit="none", desc="Relato aberto ou bloqueado além do prazo de análise dispara InfractionAnalysisOverdue."))
+    y += 6
     p.append(stat("Divergências na última conciliação", 'max by (psp_ispb) (reconciliation_last_divergences)', 0, y, 6, 4,
                   th=steps((None, "green"), (1, "red")), legend="PSP {{psp_ispb}}"))
     p.append(stat("Idade da última conciliação", 'time() - max by (psp_ispb) (reconciliation_last_timestamp_seconds)', 6, y, 6, 4, unit="s",

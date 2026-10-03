@@ -69,6 +69,9 @@ type Config struct {
 	BucketCapacity  float64 // fichas por usuário pagador
 	RefillPerMinute float64 // reposição
 	NotFoundCost    float64 // custo de uma consulta a chave inexistente (sucesso custa 1)
+	// AnalysisDeadline é o prazo do recebedor para analisar um relato de
+	// infração do MED (padrão: 72h).
+	AnalysisDeadline time.Duration
 }
 
 // Server é o simulador do DICT.
@@ -77,6 +80,11 @@ type Server struct {
 	limiter *limiter
 	cost404 float64
 	lookups metric.Int64Counter
+
+	// MED: relatos de infração.
+	reports          *mongo.Collection
+	analysisDeadline time.Duration
+	infractions      metric.Int64Counter
 }
 
 // New prepara coleção, índices e métricas.
@@ -94,7 +102,10 @@ func New(ctx context.Context, client *mongo.Client, dbName string, cfg Config) (
 	}
 	s.lookups, err = otel.Meter("github.com/brenokcunha/light-pix/internal/sim/dict").Int64Counter("dict_sim.lookups",
 		metric.WithDescription("Consultas de chave por resultado"))
-	return s, err
+	if err != nil {
+		return nil, err
+	}
+	return s, s.initMED(ctx, client.Database(dbName), cfg.AnalysisDeadline)
 }
 
 // Seed cria os vínculos que ainda não existem.
@@ -119,6 +130,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/entries", s.handleCreate)
 	mux.HandleFunc("GET /api/v1/entries/{key}", s.handleLookup)
 	mux.HandleFunc("DELETE /api/v1/entries/{key}", s.handleDelete)
+	s.routesMED(mux)
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {

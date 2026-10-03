@@ -156,3 +156,45 @@ func (c *entryCache) drop(key string) {
 	defer c.mu.Unlock()
 	delete(c.m, key)
 }
+
+// --- MED: relatos de infração -------------------------------------------------
+
+// CreateInfraction abre um relato de infração (PSP do pagador).
+func (d *Dict) CreateInfraction(ctx context.Context, req dict.InfractionRequest) (dict.InfractionReport, error) {
+	var out dict.InfractionReport
+	_, err := d.c.do(ctx, http.MethodPost, "/api/v1/infraction-reports", d.header(""), req, &out)
+	return out, err
+}
+
+// GetInfraction consulta o relato.
+func (d *Dict) GetInfraction(ctx context.Context, id string) (dict.InfractionReport, error) {
+	var out dict.InfractionReport
+	_, err := d.c.do(ctx, http.MethodGet, "/api/v1/infraction-reports/"+url.PathEscape(id), d.header(""), nil, &out)
+	return out, err
+}
+
+// ListInfractions lista os relatos do PSP: role "counterparty" (a analisar) ou
+// "reporter" (abertos por ele), opcionalmente num estado.
+func (d *Dict) ListInfractions(ctx context.Context, role, state string) ([]dict.InfractionReport, error) {
+	q := url.Values{"role": {role}}
+	if state != "" {
+		q.Set("state", state)
+	}
+	var out []dict.InfractionReport
+	_, err := d.c.do(ctx, http.MethodGet, "/api/v1/infraction-reports?"+q.Encode(), d.header(""), nil, &out)
+	return out, err
+}
+
+// AnalyzeInfraction registra a decisão do recebedor.
+func (d *Dict) AnalyzeInfraction(ctx context.Context, id string, a dict.AnalysisRequest) (dict.InfractionReport, error) {
+	var out dict.InfractionReport
+	_, err := d.c.do(ctx, http.MethodPost, "/api/v1/infraction-reports/"+url.PathEscape(id)+"/analysis", d.header(""), a, &out)
+	return out, err
+}
+
+// CancelInfraction cancela o relato antes da análise (PSP do pagador).
+func (d *Dict) CancelInfraction(ctx context.Context, id string) (dict.InfractionReport, error) {
+	var out dict.InfractionReport
+	_, err := d.c.do(ctx, http.MethodPost, "/api/v1/infraction-reports/"+url.PathEscape(id)+"/cancel", d.header(""), nil, &out)
+	return out, err
+}

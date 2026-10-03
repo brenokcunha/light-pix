@@ -213,6 +213,7 @@ func (w *world) newNode(parent context.Context, ispb string, skip map[string]boo
 	dictClient := clients.NewDict(w.dict, ispb, clients.DictConfig{Timeout: 2 * time.Second, Attempts: 2})
 	svc, err := psp.NewService(ispb, st, dictClient)
 	must(t, err)
+	svc.SetMED(dictClient)
 
 	mux := http.NewServeMux()
 	psp.NewAPI(svc, dictClient).Routes(mux)
@@ -223,7 +224,7 @@ func (w *world) newNode(parent context.Context, ispb string, skip map[string]boo
 	n.ctx = parent // cancelado junto com o mundo
 	n.resolver, err = psp.NewResolver(svc, n.spi, w.bacen, conn, psp.ResolverConfig{
 		Interval: 200 * time.Millisecond, MinAge: time.Second, DLQInterval: 400 * time.Millisecond,
-		MaxRedrives: 3, ReconcileAt: w.opts.reconcileAt,
+		MaxRedrives: 3, ReconcileAt: w.opts.reconcileAt, MEDInterval: 200 * time.Millisecond,
 	})
 	must(t, err)
 	n.resolver.SetIGA(w.bacen)
@@ -369,6 +370,14 @@ func (n *node) balance(number string) (available, held pix.Amount) {
 	return acc.Balance.Available, acc.Balance.Held
 }
 
+// account devolve a conta com os três saldos (disponível, reservado, bloqueado).
+func (n *node) account(number string) psp.Balance {
+	n.w.t.Helper()
+	acc, err := n.svc.GetAccount(context.Background(), "0001", number)
+	must(n.w.t, err)
+	return acc.Balance
+}
+
 func (n *node) setAccountStatus(number, status string) {
 	n.w.t.Helper()
 	_, err := n.client.Database(n.db).Collection("accounts").UpdateOne(context.Background(),
@@ -396,18 +405,19 @@ func (n *node) checkLedger() {
 	must(n.w.t, err)
 	var entries []psp.LedgerEntry
 	must(n.w.t, cur.All(ctx, &entries))
-	sums := map[bson.ObjectID][2]pix.Amount{}
+	sums := map[bson.ObjectID][3]pix.Amount{}
 	for _, e := range entries {
 		s := sums[e.AccountID]
-		sums[e.AccountID] = [2]pix.Amount{s[0] + e.AvailableDelta, s[1] + e.HeldDelta}
+		sums[e.AccountID] = [3]pix.Amount{s[0] + e.AvailableDelta, s[1] + e.HeldDelta, s[2] + e.BlockedDelta}
 	}
 	cur, err = db.Collection("accounts").Find(ctx, bson.D{})
 	must(n.w.t, err)
 	var accs []psp.Account
 	must(n.w.t, cur.All(ctx, &accs))
 	for _, a := range accs {
-		if s := sums[a.ID]; s[0] != a.Balance.Available || s[1] != a.Balance.Held {
-			n.w.t.Errorf("conta %s: saldo %s/%s, razão soma %s/%s", a.Number, a.Balance.Available, a.Balance.Held, s[0], s[1])
+		if s := sums[a.ID]; s[0] != a.Balance.Available || s[1] != a.Balance.Held || s[2] != a.Balance.Blocked {
+			n.w.t.Errorf("conta %s: saldo %s/%s/%s, razão soma %s/%s/%s", a.Number,
+				a.Balance.Available, a.Balance.Held, a.Balance.Blocked, s[0], s[1], s[2])
 		}
 	}
 }
@@ -479,3 +489,18 @@ func (w *world) clearSPIFaults() {
 	must(w.t, err)
 	resp.Body.Close()
 }
+
+// httpGetJSON lê uma resposta JSON como participante.
+func httpGetJSON(t *testing.T, url, participant string) map[string]any {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set(pix.HeaderRequestingParticipant, participant)
+	resp, err := http.DefaultClient.Do(req)
+	must(t, err)
+	defer resp.Body.Close()
+	out := map[string]any{}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return out
+}
+
+func bytesReader(b []byte) *bytes.Reader { return bytes.NewReader(b) }

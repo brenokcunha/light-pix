@@ -31,6 +31,7 @@ func runResolver(ctx context.Context) error {
 			{&cfg.Interval, "RESOLVER_INTERVAL", 10 * time.Second},
 			{&cfg.MinAge, "RESOLVER_MIN_AGE", 40 * time.Second},
 			{&cfg.DLQInterval, "RESOLVER_DLQ_INTERVAL", time.Minute},
+			{&cfg.MEDInterval, "MED_INTERVAL", 10 * time.Second},
 		} {
 			if *d.dst, err = config.Duration(d.key, d.def); err != nil {
 				return nil, err

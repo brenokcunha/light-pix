@@ -93,6 +93,7 @@ func runRole(ctx context.Context, service string, setup func(ctx context.Context
 	if err != nil {
 		return err
 	}
+	svc.SetMED(dict)
 
 	r := &role{ispb: ispb, client: client, db: db, rabbit: rabbit, store: st, svc: svc, dict: dict, mux: http.NewServeMux(), retryDelays: delays}
 	httpx.HandleHealth(r.mux, map[string]httpx.Check{

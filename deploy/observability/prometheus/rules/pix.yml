@@ -105,6 +105,15 @@ groups:
           summary: "O PSP {{ $labels.psp_ispb }} não concilia a conta PI há mais de 26h"
           runbook: docs/runbooks/reconciliation-divergence.md
 
+  - name: pix-med
+    rules:
+      - alert: InfractionAnalysisOverdue
+        expr: sum by (psp_ispb, role) (med_infractions_overdue) > 0
+        labels: { severity: critical, category: pix }
+        annotations:
+          summary: "{{ $value | humanize }} relatos de infração do PSP {{ $labels.psp_ispb }} ({{ $labels.role }}) passaram do prazo de análise"
+          runbook: docs/runbooks/med-infraction.md
+
   - name: pix-liquidez
     rules:
       - alert: PILiquidityLow

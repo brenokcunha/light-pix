@@ -101,6 +101,27 @@ A devolução (`D...`) passa por `PENDING → SENT → CONFIRMED` em B e `ACCEPT
 A. A soma das devoluções nunca passa do valor do Pix. `GET /v1/pix/payments/<endToEndId>/returns`
 lista as devoluções do Pix, nos dois PSPs.
 
+## Relatar uma fraude (MED)
+
+Alice caiu num golpe e pagou a Bob. O PSP A relata o Pix; o PSP B bloqueia o valor na conta
+de Bob e um analista decide:
+
+```bash
+# PSP A (Alice) relata
+curl -s -X POST http://localhost:8081/v1/pix/payments/<endToEndId>/infraction-reports \
+  -H 'Content-Type: application/json' -d '{"reason":"FRAUD","details":"golpe do falso boleto"}'
+
+# PSP B: o relato aparece bloqueado em instantes
+curl -s 'http://localhost:8082/v1/infraction-reports?state=BLOCKED'
+
+# analista do PSP B concorda (devolução especial) ou discorda (libera o valor)
+curl -s -X POST http://localhost:8082/v1/infraction-reports/<id>/decision \
+  -H 'Content-Type: application/json' -d '{"result":"AGREE","note":"fraude confirmada"}'
+```
+
+O relato passa por `OPEN → AGREED → RETURNED` em A e `BLOCKED → AGREED → RETURNED` em B; o saldo
+de Bob mostra `blocked` enquanto o valor está retido (`GET /v1/accounts/0001/2000001`).
+
 ## Dashboards, SLOs, alertas e runbooks
 
 - **Grafana** (`localhost:3000`): *Pix — visão IGA* (experiência do pagador, iniciação,

@@ -36,6 +36,11 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/pix/payments/{endToEndId}/returns", a.handleCreateReturn)
 	mux.HandleFunc("GET /v1/pix/payments/{endToEndId}/returns", a.handleListReturns)
 	mux.HandleFunc("GET /v1/pix/returns/{returnId}", a.handleGetReturn)
+	mux.HandleFunc("POST /v1/pix/payments/{endToEndId}/infraction-reports", a.handleReportInfraction)
+	mux.HandleFunc("GET /v1/infraction-reports", a.handleListInfractions)
+	mux.HandleFunc("GET /v1/infraction-reports/{id}", a.handleGetInfraction)
+	mux.HandleFunc("POST /v1/infraction-reports/{id}/cancel", a.handleCancelInfraction)
+	mux.HandleFunc("POST /v1/infraction-reports/{id}/decision", a.handleDecideInfraction)
 	mux.HandleFunc("GET /v1/accounts/{branch}/{number}", a.handleGetAccount)
 	mux.HandleFunc("POST /v1/keys", a.handleRegisterKey)
 	mux.HandleFunc("DELETE /v1/keys/{key}", a.handleRemoveKey)
@@ -97,6 +102,74 @@ func (a *API) handleListReturns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, list)
+}
+
+func (a *API) handleReportInfraction(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Reason  string `json:"reason"`
+		Details string `json:"details"`
+	}
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+	inf, err := a.svc.ReportInfraction(r.Context(), r.PathValue("endToEndId"), req.Reason, req.Details)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	w.Header().Set("Location", "/v1/infraction-reports/"+inf.ID)
+	httpx.WriteJSON(w, http.StatusCreated, inf)
+}
+
+func (a *API) handleListInfractions(w http.ResponseWriter, r *http.Request) {
+	list, err := a.svc.ListInfractions(r.Context(), r.URL.Query().Get("role"), r.URL.Query().Get("state"))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, list)
+}
+
+func (a *API) handleGetInfraction(w http.ResponseWriter, r *http.Request) {
+	inf, err := a.svc.GetInfraction(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, inf)
+}
+
+func (a *API) handleCancelInfraction(w http.ResponseWriter, r *http.Request) {
+	inf, err := a.svc.CancelInfraction(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, inf)
+}
+
+// handleDecideInfraction é a análise do PSP recebedor: result AGREE devolve o
+// valor bloqueado (devolução especial); DISAGREE o libera.
+func (a *API) handleDecideInfraction(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Result string `json:"result"`
+		Note   string `json:"note"`
+	}
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+	if req.Result != "AGREE" && req.Result != "DISAGREE" {
+		httpx.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "result deve ser AGREE ou DISAGREE")
+		return
+	}
+	inf, err := a.svc.DecideInfraction(r.Context(), r.PathValue("id"), req.Result == "AGREE", req.Note)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, inf)
 }
 
 func (a *API) handleGetPayment(w http.ResponseWriter, r *http.Request) {

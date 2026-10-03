@@ -42,6 +42,7 @@ type ResolverConfig struct {
 	MaxRedrives int           // vezes que uma mensagem sai da DLQ antes de ser estacionada (3)
 	ReconcileAt string        // "HH:MM" UTC da reconciliação diária; vazio desliga
 	IGAInterval time.Duration // período do envio dos instantes ao regulador (10s)
+	MEDInterval time.Duration // período do ciclo do MED: relatos novos, decisões e devoluções especiais (10s)
 }
 
 func (c *ResolverConfig) defaults() {
@@ -62,6 +63,9 @@ func (c *ResolverConfig) defaults() {
 	}
 	if c.IGAInterval == 0 {
 		c.IGAInterval = 10 * time.Second
+	}
+	if c.MEDInterval == 0 {
+		c.MEDInterval = 10 * time.Second
 	}
 }
 
@@ -117,6 +121,21 @@ func NewResolver(svc *Service, spi SPIStatus, pi PIStatement, conn *amqp.Connect
 	}
 	if r.igaReported, err = meter.Int64Counter("resolver.iga.reported",
 		metric.WithDescription("Registros enviados ao regulador (IGA)")); err != nil {
+		return nil, err
+	}
+	_, err = meter.Int64ObservableGauge("med.infractions.overdue",
+		metric.WithDescription("Relatos de infração abertos ou bloqueados além do prazo de análise, por papel"),
+		metric.WithInt64Callback(func(ctx context.Context, o metric.Int64Observer) error {
+			counts, err := svc.overdueInfractions(ctx)
+			if err != nil {
+				return err
+			}
+			for role, n := range counts {
+				o.Observe(n, metric.WithAttributes(attribute.String("role", role)))
+			}
+			return nil
+		}))
+	if err != nil {
 		return nil, err
 	}
 	_, err = meter.Int64ObservableGauge("pix.payments.stuck",
@@ -219,6 +238,7 @@ func (r *Resolver) Run(ctx context.Context) error {
 	if r.conn != nil {
 		loop(r.cfg.DLQInterval, r.RedriveDLQs, "dlq")
 	}
+	loop(r.cfg.MEDInterval, r.svc.SyncInfractions, "med")
 	if r.igaSink != nil {
 		loop(r.cfg.IGAInterval, func(ctx context.Context) error { _, err := r.ReportIGA(ctx); return err }, "iga")
 	}

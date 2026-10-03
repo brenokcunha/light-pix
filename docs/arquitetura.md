@@ -192,7 +192,12 @@ mesmas escritas condicionais do caminho normal, então várias réplicas convive
 - `DELETE /api/v1/entries/{key}`: só o participante dono.
 - Carga inicial em `deploy/sims/dict-seed.json` (Alice e Carol em A; Bob e
   Dave em B, uma chave de cada tipo).
-- (fase MED) relatos de infração e pedidos de devolução.
+- **Relatos de infração (MED)**: `POST /api/v1/infraction-reports` (o PSP do pagador relata
+  um Pix seu), `GET` (um relato, ou a lista: `role=counterparty` é a fila de quem precisa
+  analisar), `POST .../analysis` (o recebedor decide, uma vez: `AGREED` ou `DISAPPROVED`, com
+  a devolução especial gerada) e `POST .../cancel` (o pagador, só antes da análise). Um relato
+  ativo por Pix (índice único parcial); prazo de análise `DICT_ANALYSIS_DEADLINE` (72h), com
+  `overdue` calculado na leitura. Só participam do relato os dois PSPs.
 
 **bacen-sim** — reservas do participante e visão do regulador:
 - `POST /api/v1/settlements` (chamado pelo spi-sim): débito e crédito nas
@@ -273,6 +278,29 @@ Pix original, que continua devolvível. O resolver, a DLQ e a reconciliação tr
 devoluções como tratam Pix; as métricas ficam em `pix.returns.finished`, fora dos SLOs
 de Pix.
 
+### 6.4 MED: relato de infração e devolução especial
+
+1. A vítima avisa o PSP do pagador, que relata o Pix (`POST /v1/pix/payments/{E...}/infraction-reports`,
+   `FRAUD` ou `SCAM`, em até 80 dias) no DICT. O relato nasce `OPEN`.
+2. O ciclo do MED do PSP recebedor (no resolver, a cada 10s) traz o relato e faz o
+   **bloqueio cautelar**: move da conta que recebeu o Pix, de `available` para `blocked`, o
+   valor relatado ou o que sobrar dele (`BLOCK` no razão). Relato sobre um Pix que ele não
+   conhece, não creditado ou incoerente é recusado sozinho.
+3. O analista decide (`POST /v1/infraction-reports/{id}/decision`):
+   - `AGREE`: o bloqueio vira reserva de uma **devolução especial** (`pacs.004`, motivo `FR01`,
+     `MED_RESERVE`) do valor bloqueado, que segue o fluxo de qualquer devolução; o relato fica
+     `AGREED` e depois `RETURNED` (ou `RETURN_FAILED`, que exige ação manual). Sem nada
+     bloqueado, fica `NO_FUNDS`.
+   - `DISAGREE`: o valor volta ao disponível (`UNBLOCK`), `DISAPPROVED`.
+   A decisão vai ao DICT pelo mesmo ciclo (reenviada até conseguir).
+4. O PSP do pagador acompanha o relato no DICT e fecha o dele quando a devolução especial é
+   creditada. Se o pagador cancelar antes da análise, o recebedor desbloqueia no ciclo seguinte.
+
+Limitação do laboratório: o MED 2.0 real rastreia o dinheiro que já saiu da conta do primeiro
+recebedor para outras; aqui o bloqueio alcança só o saldo da conta que recebeu o Pix. Estados
+em `infractions` (um documento por PSP e relato); `med.infractions` e `med.infractions.overdue`
+(alerta `InfractionAnalysisOverdue`) são as métricas.
+
 ### 6.2 Falhas tratadas
 
 | Falha | Tratamento |
@@ -297,9 +325,10 @@ reprocessar um evento antigo nunca regride um pagamento.
 | Coleção | Conteúdo | Índices |
 |---|---|---|
 | `accounts` | agência/conta, titular, `balance.available`, `balance.held` (centavos), status | único (agência, conta) |
-| `ledger_entries` | lançamentos append-only (`SEED`, `HOLD`, `CONFIRM`, `RELEASE`, `CREDIT`), cada um com `availableDelta` e `heldDelta`: o saldo é a soma do razão | único (conta, `EndToEndId`, tipo); (conta, data) |
+| `ledger_entries` | lançamentos append-only (`SEED`, `HOLD`, `CONFIRM`, `RELEASE`, `CREDIT` e, no MED, `BLOCK`, `UNBLOCK`, `MED_RESERVE`), cada um com `availableDelta`, `heldDelta` e `blockedDelta`: o saldo é a soma do razão | único (conta, `EndToEndId`, tipo); (conta, data) |
 | `payments` | `_id = EndToEndId`, direção (`OUT`/`IN`), estado, valor, partes, histórico, `createdAt` (OUT: t0; IN: chegada da `pacs.008`), `sentAt`, `acceptedAt`, `settledAt`, `finishedAt`, `returnedAmount` (valor já devolvido ou em devolução) | estado + `updatedAt` (resolver) |
 | `returns` | devoluções, no mesmo formato de `payments`: `_id = D...`, `returnOf` (Pix original), `returnReason` | estado + `updatedAt`; `returnOf` |
+| `infractions` | relatos de infração do MED, nos papéis `REPORTER` e `RECEIVER`: estado, valor relatado e bloqueado, decisão, devolução especial, prazo | papel + estado + `createdAt`; `endToEndId` |
 | `idempotency_keys` | (conta, `Idempotency-Key`) → `EndToEndId` + hash do pedido | único (conta, chave), TTL 24h |
 | `outbox` | rota, `messageId`, corpo JSON, `traceContext`, `createdAt`, `publishedAt` | `publishedAt` (TTL 24h só nos publicados) |
 | `relay_checkpoints` | resume token do change stream | — |

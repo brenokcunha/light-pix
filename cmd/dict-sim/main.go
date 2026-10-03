@@ -40,6 +40,9 @@ func setup(ctx context.Context, client *mongo.Client, db string, mux *http.Serve
 			return nil, err
 		}
 	}
+	if cfg.AnalysisDeadline, err = config.Duration("DICT_ANALYSIS_DEADLINE", dict.DefaultAnalysisDeadline); err != nil {
+		return nil, err
+	}
 	s, err := dict.New(ctx, client, db, cfg)
 	if err != nil {
 		return nil, err

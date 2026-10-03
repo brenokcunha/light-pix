@@ -49,6 +49,11 @@ const (
 	EntryConfirm = "CONFIRM" // liquidação: held −
 	EntryRelease = "RELEASE" // rejeição: held −, available +
 	EntryCredit  = "CREDIT"  // Pix recebido liquidado: available +
+
+	// MED: bloqueio cautelar do valor suspeito e seu destino.
+	EntryBlock      = "BLOCK"       // relato recebido: available −, blocked +
+	EntryUnblock    = "UNBLOCK"     // recebedor discordou ou o relato foi cancelado: blocked −, available +
+	EntryMedReserve = "MED_RESERVE" // recebedor concordou: blocked −, held + (reserva da devolução especial)
 )
 
 // Holder é o titular da conta.
@@ -63,6 +68,8 @@ type Holder struct {
 type Balance struct {
 	Available pix.Amount `bson:"available" json:"available"`
 	Held      pix.Amount `bson:"held" json:"held"`
+	// Blocked é o valor bloqueado cautelarmente por um relato de infração (MED).
+	Blocked pix.Amount `bson:"blocked,omitempty" json:"blocked,omitempty"`
 }
 
 // Account é uma conta transacional do PSP.
@@ -88,6 +95,7 @@ type LedgerEntry struct {
 	Kind           string        `bson:"kind"`
 	AvailableDelta pix.Amount    `bson:"availableDelta"`
 	HeldDelta      pix.Amount    `bson:"heldDelta"`
+	BlockedDelta   pix.Amount    `bson:"blockedDelta,omitempty"`
 	CreatedAt      time.Time     `bson:"createdAt"`
 }
 

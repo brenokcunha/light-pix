@@ -106,6 +106,7 @@ services:
       <<: *psp-a-env
       SPI_URL: http://spi-sim:8080
       BACEN_URL: http://bacen-sim:8080
+      MED_INTERVAL: 10s
       RESOLVER_INTERVAL: 10s
       RESOLVER_MIN_AGE: 40s
       RECONCILE_AT: "03:00"
@@ -153,6 +154,7 @@ services:
       <<: *psp-b-env
       SPI_URL: http://spi-sim:8080
       BACEN_URL: http://bacen-sim:8080
+      MED_INTERVAL: 10s
       RESOLVER_INTERVAL: 10s
       RESOLVER_MIN_AGE: 40s
       RECONCILE_AT: "03:00"
@@ -194,6 +196,8 @@ services:
       DICT_PAYER_BUCKET_CAPACITY: "100"
       DICT_PAYER_REFILL_PER_MIN: "60"
       DICT_NOT_FOUND_COST: "20"
+      # Prazo do recebedor para analisar um relato de infração (MED).
+      DICT_ANALYSIS_DEADLINE: 72h
 
   bacen-sim:
     <<: *sim
