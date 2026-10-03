@@ -26,6 +26,7 @@ type Store struct {
 	accounts *mongo.Collection
 	ledger   *mongo.Collection
 	payments *mongo.Collection
+	returns  *mongo.Collection // devoluções (pacs.004), com o mesmo formato dos pagamentos
 	idem     *mongo.Collection
 	outbox   *mongo.Collection
 	// deadLetters guarda mensagens que esgotaram os reenvios da DLQ.
@@ -43,6 +44,7 @@ func NewStore(ctx context.Context, client *mongo.Client, db *mongo.Database) (*S
 		accounts: db.Collection("accounts"),
 		ledger:   db.Collection("ledger_entries"),
 		payments: db.Collection("payments"),
+		returns:  db.Collection("returns"),
 		idem:     db.Collection("idempotency_keys"),
 		outbox:   outbox.Collection(db),
 
@@ -64,6 +66,10 @@ func NewStore(ctx context.Context, client *mongo.Client, db *mongo.Database) (*S
 		{s.payments, []mongo.IndexModel{
 			// Para o pending-resolver achar os não terminais parados.
 			{Keys: bson.D{{Key: "state", Value: 1}, {Key: "updatedAt", Value: 1}}},
+		}},
+		{s.returns, []mongo.IndexModel{
+			{Keys: bson.D{{Key: "state", Value: 1}, {Key: "updatedAt", Value: 1}}},
+			{Keys: bson.D{{Key: "returnOf", Value: 1}, {Key: "createdAt", Value: 1}}},
 		}},
 		{s.idem, []mongo.IndexModel{
 			{Keys: bson.D{{Key: "scope", Value: 1}, {Key: "key", Value: 1}}, Options: options.Index().SetUnique(true)},
@@ -143,9 +149,25 @@ func (s *Store) FindAccount(ctx context.Context, branch, number string) (Account
 	return acc, err
 }
 
-// FindPayment busca o pagamento pelo EndToEndId.
+// FindPayment busca o pagamento pelo EndToEndId (só Pix; devoluções ficam em
+// returns, ver FindTx).
 func (s *Store) FindPayment(ctx context.Context, endToEndID string) (Payment, error) {
 	var p Payment
 	err := s.payments.FindOne(ctx, bson.D{{Key: "_id", Value: endToEndID}}).Decode(&p)
+	return p, err
+}
+
+// coll devolve a coleção de um identificador: "D..." é devolução, o resto é Pix.
+func (s *Store) coll(id string) *mongo.Collection {
+	if pix.IsReturnID(id) {
+		return s.returns
+	}
+	return s.payments
+}
+
+// FindTx busca um Pix ou uma devolução pelo identificador.
+func (s *Store) FindTx(ctx context.Context, id string) (Payment, error) {
+	var p Payment
+	err := s.coll(id).FindOne(ctx, bson.D{{Key: "_id", Value: id}}).Decode(&p)
 	return p, err
 }

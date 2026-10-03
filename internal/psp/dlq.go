@@ -137,10 +137,13 @@ func (r *Resolver) park(ctx context.Context, queue string, d amqp.Delivery) erro
 // (ED05) e a reserva volta; se já existe, vale a situação dele.
 func (r *Resolver) settleUnsent(ctx context.Context, body []byte) error {
 	var env iso20022.Envelope
-	if err := json.Unmarshal(body, &env); err != nil || env.AppHdr.MsgDefIdr != iso20022.MsgPacs008 || env.FIToFICstmrCdtTrf == nil {
-		return nil // não é uma pacs.008 de Pix enviado: só estaciona
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil
 	}
-	e2e := env.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId
+	e2e := originatedID(env)
+	if e2e == "" {
+		return nil // não inicia Pix nem devolução (é uma pacs.002): só estaciona
+	}
 	st, err := r.spi.Status(ctx, r.svc.ispb, e2e)
 	var apiErr *clients.APIError
 	switch {

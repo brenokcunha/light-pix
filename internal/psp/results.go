@@ -57,10 +57,10 @@ func (s *Service) HandleResult(ctx context.Context, d amqp.Delivery) error {
 		return nil // ACSP não muda o estado de ninguém
 	}
 
-	p, err := s.store.FindPayment(ctx, e2e)
+	p, err := s.store.FindTx(ctx, e2e)
 	switch {
 	case errors.Is(err, mongo.ErrNoDocuments):
-		if payer, _ := pix.ParseEndToEndID(e2e); payer == s.ispb {
+		if origin, _, _ := pix.ParseTransactionID(e2e); origin == s.ispb {
 			slog.WarnContext(ctx, "resultado de Pix enviado que não existe neste PSP; ignorado", "end_to_end_id", e2e)
 			return nil
 		}
@@ -97,7 +97,7 @@ func (s *Service) Finish(ctx context.Context, endToEndID, state, reason string, 
 
 	var p Payment
 	err := store.Transact(ctx, s.store.client, func(ctx context.Context) error {
-		err := s.store.payments.FindOneAndUpdate(ctx,
+		err := s.store.coll(endToEndID).FindOneAndUpdate(ctx,
 			bson.D{{Key: "_id", Value: endToEndID}, {Key: "direction", Value: DirectionOut},
 				{Key: "state", Value: bson.D{{Key: "$in", Value: bson.A{StatePending, StateSent}}}}},
 			bson.D{{Key: "$set", Value: set},
@@ -110,6 +110,12 @@ func (s *Service) Finish(ctx context.Context, endToEndID, state, reason string, 
 			return err
 		}
 
+		// Devolução rejeitada libera o valor que reservava do Pix original.
+		if state == StateRejected {
+			if err := s.releaseReturned(ctx, p); err != nil {
+				return err
+			}
+		}
 		// Confirmar baixa a reserva; rejeitar a devolve ao saldo disponível.
 		entry := LedgerEntry{ID: bson.NewObjectID(), AccountID: p.Debtor.AccountID, EndToEndID: endToEndID,
 			Kind: EntryConfirm, HeldDelta: -p.Amount, CreatedAt: now}
@@ -135,6 +141,12 @@ func (s *Service) Finish(ctx context.Context, endToEndID, state, reason string, 
 		return err
 	}
 
+	if pix.IsReturnID(endToEndID) {
+		s.returnsFinished.Add(ctx, 1, metric.WithAttributes(attribute.String("direction", DirectionOut),
+			attribute.String("state", state), attribute.String("reason", reason)))
+		slog.InfoContext(ctx, "devolução finalizada", "return_id", endToEndID, "original", p.ReturnOf, "state", state, "reason", reason)
+		return nil
+	}
 	attrs := metric.WithAttributes(attribute.String("state", state))
 	s.finished.Add(ctx, 1, metric.WithAttributes(attribute.String("state", state), attribute.String("reason", reason)))
 	s.duration.Record(ctx, now.Sub(p.CreatedAt).Seconds(), attrs)
@@ -147,7 +159,7 @@ func (s *Service) Finish(ctx context.Context, endToEndID, state, reason string, 
 // resultado já chegou, o estado final prevalece.
 func (s *Service) MarkSent(ctx context.Context, endToEndID string) error {
 	now := store.Now()
-	_, err := s.store.payments.UpdateOne(ctx,
+	_, err := s.store.coll(endToEndID).UpdateOne(ctx,
 		bson.D{{Key: "_id", Value: endToEndID}, {Key: "state", Value: StatePending}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "state", Value: StateSent}, {Key: "sentAt", Value: now}, {Key: "updatedAt", Value: now}}},
 			{Key: "$push", Value: bson.D{{Key: "history", Value: Transition{State: StateSent, At: now}}}}})

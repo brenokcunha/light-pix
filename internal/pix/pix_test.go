@@ -83,3 +83,35 @@ func TestValidateKey(t *testing.T) {
 		}
 	}
 }
+
+func TestReturnID(t *testing.T) {
+	now := time.Date(2026, 10, 2, 15, 4, 0, 0, time.UTC)
+	id := NewReturnID("22222222", now)
+	if len(id) != 32 || id[0] != 'D' {
+		t.Fatalf("id = %q", id)
+	}
+	if ispb, err := ParseReturnID(id); err != nil || ispb != "22222222" {
+		t.Fatalf("ParseReturnID = %q, %v", ispb, err)
+	}
+	if _, err := ParseReturnID(NewEndToEndID("22222222", now)); err == nil {
+		t.Fatal("um EndToEndId não é identificador de devolução")
+	}
+	if _, err := ParseEndToEndID(id); err == nil {
+		t.Fatal("um identificador de devolução não é EndToEndId")
+	}
+	for _, c := range []struct {
+		id     string
+		isRet  bool
+		wantOK bool
+	}{
+		{id, true, true},
+		{NewEndToEndID("11111111", now), false, true},
+		{"X123", false, false},
+		{"D22222222999999999999abcdefghijk", true, false}, // data inválida
+	} {
+		ispb, isRet, err := ParseTransactionID(c.id)
+		if (err == nil) != c.wantOK || (c.wantOK && (isRet != c.isRet || ispb == "")) {
+			t.Errorf("ParseTransactionID(%q) = %q, %v, %v", c.id, ispb, isRet, err)
+		}
+	}
+}

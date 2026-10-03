@@ -74,16 +74,21 @@ func (r *Resolver) Reconcile(ctx context.Context, from, to time.Time, trigger st
 	if err != nil {
 		return Report{}, fmt.Errorf("extrato da conta PI: %w", err)
 	}
-	cur, err := r.svc.store.payments.Find(ctx, bson.D{
-		{Key: "state", Value: bson.D{{Key: "$in", Value: bson.A{StateConfirmed, StateCredited}}}},
-		{Key: "settledAt", Value: bson.D{{Key: "$gte", Value: from.UTC()}, {Key: "$lt", Value: to.UTC()}}},
-	})
-	if err != nil {
-		return Report{}, err
-	}
+	// Pix e devoluções liquidam na conta PI e entram no mesmo extrato.
 	var settled []Payment
-	if err := cur.All(ctx, &settled); err != nil {
-		return Report{}, err
+	for _, coll := range []*mongo.Collection{r.svc.store.payments, r.svc.store.returns} {
+		cur, err := coll.Find(ctx, bson.D{
+			{Key: "state", Value: bson.D{{Key: "$in", Value: bson.A{StateConfirmed, StateCredited}}}},
+			{Key: "settledAt", Value: bson.D{{Key: "$gte", Value: from.UTC()}, {Key: "$lt", Value: to.UTC()}}},
+		})
+		if err != nil {
+			return Report{}, err
+		}
+		var batch []Payment
+		if err := cur.All(ctx, &batch); err != nil {
+			return Report{}, err
+		}
+		settled = append(settled, batch...)
 	}
 	local := make(map[string]Payment, len(settled))
 	rep := Report{ID: bson.NewObjectID(), ISPB: r.svc.ispb, Trigger: trigger, From: from.UTC(), To: to.UTC(),
@@ -119,7 +124,7 @@ func (r *Resolver) Reconcile(ctx context.Context, from, to time.Time, trigger st
 		switch {
 		case !ok:
 			d := Divergence{Type: DivPIWithoutLocal, EndToEndID: e.Reference, PIAmount: amount, LocalState: "MISSING"}
-			switch found, err := r.svc.store.FindPayment(ctx, e.Reference); {
+			switch found, err := r.svc.store.FindTx(ctx, e.Reference); {
 			case err == nil:
 				d.LocalState, d.LocalAmount = found.Direction+"/"+found.State, found.Amount
 			case !errors.Is(err, mongo.ErrNoDocuments):

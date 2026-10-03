@@ -10,6 +10,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -158,27 +159,33 @@ func (r *Resolver) nonTerminal() bson.D {
 }
 
 func (r *Resolver) observeStuck(ctx context.Context, o metric.Int64Observer) error {
-	cur, err := r.svc.store.payments.Aggregate(ctx, bson.A{
-		bson.D{{Key: "$match", Value: r.nonTerminal()}},
-		bson.D{{Key: "$group", Value: bson.D{
-			{Key: "_id", Value: bson.D{{Key: "direction", Value: "$direction"}, {Key: "state", Value: "$state"}}},
-			{Key: "n", Value: bson.D{{Key: "$sum", Value: 1}}},
-		}}},
-	})
-	if err != nil {
-		return err
-	}
-	var rows []struct {
-		ID struct{ Direction, State string } `bson:"_id"`
-		N  int64                             `bson:"n"`
-	}
-	if err := cur.All(ctx, &rows); err != nil {
-		return err
+	counts := map[[2]string]int64{}
+	for _, coll := range []*mongo.Collection{r.svc.store.payments, r.svc.store.returns} {
+		cur, err := coll.Aggregate(ctx, bson.A{
+			bson.D{{Key: "$match", Value: r.nonTerminal()}},
+			bson.D{{Key: "$group", Value: bson.D{
+				{Key: "_id", Value: bson.D{{Key: "direction", Value: "$direction"}, {Key: "state", Value: "$state"}}},
+				{Key: "n", Value: bson.D{{Key: "$sum", Value: 1}}},
+			}}},
+		})
+		if err != nil {
+			return err
+		}
+		var rows []struct {
+			ID struct{ Direction, State string } `bson:"_id"`
+			N  int64                             `bson:"n"`
+		}
+		if err := cur.All(ctx, &rows); err != nil {
+			return err
+		}
+		for _, row := range rows {
+			counts[[2]string{row.ID.Direction, row.ID.State}] += row.N
+		}
 	}
 	seen := map[[2]string]bool{}
-	for _, row := range rows {
-		seen[[2]string{row.ID.Direction, row.ID.State}] = true
-		o.Observe(row.N, metric.WithAttributes(attribute.String("direction", row.ID.Direction), attribute.String("state", row.ID.State)))
+	for k, n := range counts {
+		seen[k] = true
+		o.Observe(n, metric.WithAttributes(attribute.String("direction", k[0]), attribute.String("state", k[1])))
 	}
 	// Combinações sem pendência precisam aparecer com 0, para o alerta zerar.
 	for _, k := range [][2]string{{DirectionOut, StatePending}, {DirectionOut, StateSent}, {DirectionIn, StateAccepted}} {
@@ -225,19 +232,24 @@ func (r *Resolver) Run(ctx context.Context) error {
 // ResolvePending consulta o SPI sobre os pagamentos parados e aplica o
 // resultado pelo mesmo caminho do worker. Devolve quantos examinou.
 func (r *Resolver) ResolvePending(ctx context.Context) (int, error) {
-	cur, err := r.svc.store.payments.Find(ctx, r.nonTerminal(),
-		options.Find().SetSort(bson.D{{Key: "updatedAt", Value: 1}}).SetLimit(int64(r.cfg.BatchSize)))
-	if err != nil {
-		return 0, err
+	total := 0
+	// Pix e devoluções seguem o mesmo ciclo de vida e a mesma consulta ao SPI.
+	for _, coll := range []*mongo.Collection{r.svc.store.payments, r.svc.store.returns} {
+		cur, err := coll.Find(ctx, r.nonTerminal(),
+			options.Find().SetSort(bson.D{{Key: "updatedAt", Value: 1}}).SetLimit(int64(r.cfg.BatchSize)))
+		if err != nil {
+			return total, err
+		}
+		var pending []Payment
+		if err := cur.All(ctx, &pending); err != nil {
+			return total, err
+		}
+		for _, p := range pending {
+			r.resolveOne(ctx, p)
+		}
+		total += len(pending)
 	}
-	var pending []Payment
-	if err := cur.All(ctx, &pending); err != nil {
-		return 0, err
-	}
-	for _, p := range pending {
-		r.resolveOne(ctx, p)
-	}
-	return len(pending), nil
+	return total, nil
 }
 
 func (r *Resolver) resolveOne(ctx context.Context, p Payment) {

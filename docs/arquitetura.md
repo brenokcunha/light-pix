@@ -73,6 +73,10 @@ evento de outbox com a `pacs.008`.
 - Erros de negócio: `INSUFFICIENT_FUNDS`, `ACCOUNT_NOT_FOUND`, `ACCOUNT_NOT_ACTIVE`,
   `KEY_NOT_FOUND`, `SAME_PSP_NOT_SUPPORTED` (422), `DICT_RATE_LIMITED` (429),
   `DICT_UNAVAILABLE` (503, falha rápida com o breaker aberto).
+- Devolução: `POST /v1/pix/payments/{endToEndId}/returns` (com `Idempotency-Key`) devolve,
+  total ou parcialmente, um Pix recebido e creditado, dentro de 90 dias; `GET
+  /v1/pix/returns/{id}` e `GET /v1/pix/payments/{endToEndId}/returns` consultam.
+  Ver 6.3.
 - Também expõe `GET /v1/pix/payments/{endToEndId}`, `GET /v1/accounts/{agência}/{conta}`
   e gestão de chaves (`POST /v1/keys`, `DELETE /v1/keys/{chave}`, proxy ao DICT).
 
@@ -161,6 +165,16 @@ mesmas escritas condicionais do caminho normal, então várias réplicas convive
   - Liquidação recusada pelo bacen-sim → `RJCT AM04` (saldo) ou `ED05` para os
     dois; falha temporária deixa em `SETTLING` e a varredura tenta de novo.
   - Liquidou → `ACSC` para os dois.
+- Devolução (`pacs.004`): o SPI valida que o Pix original está liquidado e dentro do
+  prazo (`ReturnWindow`, 90 dias), que quem devolve é o recebedor dele e que a
+  devolução vai ao pagador dele. O total devolvido (ou em devolução) não passa do
+  valor do Pix: a reserva é um `$inc` condicional no Pix original, na mesma
+  transação que grava a devolução, então devoluções simultâneas nunca somam mais
+  que o Pix. Recusas síncronas: `UNKNOWN_END_TO_END_ID`, `ORIGINAL_NOT_SETTLED`,
+  `FORBIDDEN`, `RETURN_WINDOW_EXPIRED`, `RETURN_AMOUNT_EXCEEDED`. A devolução é uma
+  transação do SPI com identificador `D...` e `kind=RETURN`; segue os estados do
+  Pix (o pagador original responde `pacs.002`, o SPI liquida, o prazo vence com
+  `AB03`) e, se rejeitada, libera o valor reservado.
 - Deduplicação por `EndToEndId`: reenvio da mesma mensagem é aceito e
   ignorado; o mesmo id em outra mensagem → `409 DUPLICATE_END_TO_END_ID`.
 - Extensão do laboratório: cada mensagem entregue carrega `traceContext`
@@ -241,6 +255,24 @@ Conta PI sem saldo (`AM04`) não é uma falha injetada: basta uma retirada STR
 8. A: `CONFIRMED`, baixa `held`, notifica o pagador (`t6a`).
    B: `CREDITED`, credita o recebedor.
 
+### 6.3 Devolução (R → P: o recebedor devolve ao pagador)
+
+1. O cliente de B pede `POST /v1/pix/payments/{E...}/returns`. B reserva o valor
+   devolvível do Pix original (teto atômico), reserva o saldo do cliente, grava a
+   devolução `PENDING` (coleção `returns`, `_id = D...`) e a `pacs.004` na outbox.
+2. O conector envia ao SPI (`SENT`), que valida e encaminha a A (pagador original).
+3. A, no incoming-worker, confere que o Pix é dele e foi confirmado, que a conta
+   existe e está ativa e que a devolução cabe no que resta; grava a devolução
+   `ACCEPTED` e responde `pacs.002 ACSP` (ou `RJCT`: `BE01` incoerente, `AC03`/`AC06`
+   conta, `AM09` valor).
+4. O SPI liquida da conta PI de B para a de A e manda `ACSC` aos dois. B baixa a
+   reserva (`CONFIRMED`); A credita a conta (`CREDITED`).
+
+Rejeição em qualquer ponto devolve a reserva de saldo ao cliente de B e o valor ao
+Pix original, que continua devolvível. O resolver, a DLQ e a reconciliação tratam
+devoluções como tratam Pix; as métricas ficam em `pix.returns.finished`, fora dos SLOs
+de Pix.
+
 ### 6.2 Falhas tratadas
 
 | Falha | Tratamento |
@@ -266,7 +298,8 @@ reprocessar um evento antigo nunca regride um pagamento.
 |---|---|---|
 | `accounts` | agência/conta, titular, `balance.available`, `balance.held` (centavos), status | único (agência, conta) |
 | `ledger_entries` | lançamentos append-only (`SEED`, `HOLD`, `CONFIRM`, `RELEASE`, `CREDIT`), cada um com `availableDelta` e `heldDelta`: o saldo é a soma do razão | único (conta, `EndToEndId`, tipo); (conta, data) |
-| `payments` | `_id = EndToEndId`, direção (`OUT`/`IN`), estado, valor, partes, histórico, `createdAt` (OUT: t0; IN: chegada da `pacs.008`), `sentAt`, `acceptedAt`, `settledAt`, `finishedAt` | estado + `updatedAt` (resolver) |
+| `payments` | `_id = EndToEndId`, direção (`OUT`/`IN`), estado, valor, partes, histórico, `createdAt` (OUT: t0; IN: chegada da `pacs.008`), `sentAt`, `acceptedAt`, `settledAt`, `finishedAt`, `returnedAmount` (valor já devolvido ou em devolução) | estado + `updatedAt` (resolver) |
+| `returns` | devoluções, no mesmo formato de `payments`: `_id = D...`, `returnOf` (Pix original), `returnReason` | estado + `updatedAt`; `returnOf` |
 | `idempotency_keys` | (conta, `Idempotency-Key`) → `EndToEndId` + hash do pedido | único (conta, chave), TTL 24h |
 | `outbox` | rota, `messageId`, corpo JSON, `traceContext`, `createdAt`, `publishedAt` | `publishedAt` (TTL 24h só nos publicados) |
 | `relay_checkpoints` | resume token do change stream | — |

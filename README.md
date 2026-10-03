@@ -86,6 +86,21 @@ cerca de 20 Pix/s; acima de ~25 Pix/s a fila cresce, o p99 passa de 10s e o
 MongoDB (um nó, transações em todo passo) é o recurso saturado. Depois de uma
 carga alta, espere os pagamentos pendentes terminarem antes da próxima rodada.
 
+## Devolver um Pix
+
+Quem recebeu pode devolver, total ou parcialmente, em até 90 dias. Bob devolve R$ 10 do
+Pix que recebeu de Alice (o `endToEndId` vem da resposta do Pix):
+
+```bash
+curl -s -X POST http://localhost:8082/v1/pix/payments/<endToEndId>/returns \
+  -H 'Idempotency-Key: minha-devolucao' -H 'Content-Type: application/json' \
+  -d '{"amount":10.00,"reason":"MD06"}'
+```
+
+A devolução (`D...`) passa por `PENDING → SENT → CONFIRMED` em B e `ACCEPTED → CREDITED` em
+A. A soma das devoluções nunca passa do valor do Pix. `GET /v1/pix/payments/<endToEndId>/returns`
+lista as devoluções do Pix, nos dois PSPs.
+
 ## Dashboards, SLOs, alertas e runbooks
 
 - **Grafana** (`localhost:3000`): *Pix — visão IGA* (experiência do pagador, iniciação,

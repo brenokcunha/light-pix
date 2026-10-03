@@ -38,8 +38,14 @@ func (s *Service) HandleIncoming(ctx context.Context, d amqp.Delivery) error {
 	if err := json.Unmarshal(d.Body, &env); err != nil {
 		return broker.Permanent(fmt.Errorf("pacs.008 ilegível: %w", err))
 	}
-	if err := env.Validate(); err != nil || env.FIToFICstmrCdtTrf == nil {
-		return broker.Permanent(fmt.Errorf("pacs.008 inválida: %v", err))
+	if err := env.Validate(); err != nil {
+		return broker.Permanent(fmt.Errorf("mensagem inválida: %v", err))
+	}
+	if env.AppHdr.MsgDefIdr == iso20022.MsgPacs004 {
+		return s.handleIncomingReturn(ctx, env)
+	}
+	if env.FIToFICstmrCdtTrf == nil {
+		return broker.Permanent(errors.New("pacs.008 sem documento"))
 	}
 	doc := env.FIToFICstmrCdtTrf
 	tx := doc.CdtTrfTxInf
@@ -136,7 +142,7 @@ func (s *Service) FinishIncoming(ctx context.Context, endToEndID, state, reason 
 
 	var p Payment
 	err := store.Transact(ctx, s.store.client, func(ctx context.Context) error {
-		err := s.store.payments.FindOneAndUpdate(ctx,
+		err := s.store.coll(endToEndID).FindOneAndUpdate(ctx,
 			bson.D{{Key: "_id", Value: endToEndID}, {Key: "direction", Value: DirectionIn}, {Key: "state", Value: StateAccepted}},
 			bson.D{{Key: "$set", Value: set},
 				{Key: "$push", Value: bson.D{{Key: "history", Value: Transition{State: state, At: now, Reason: reason}}}}},
@@ -144,8 +150,14 @@ func (s *Service) FinishIncoming(ctx context.Context, endToEndID, state, reason 
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return errSkip
 		}
-		if err != nil || state != StateCredited {
+		if err != nil {
 			return err
+		}
+		if state == StateRejected {
+			return s.releaseReturned(ctx, p) // devolução recebida e cancelada libera o Pix original
+		}
+		if state != StateCredited {
+			return nil
 		}
 		if _, err := s.store.accounts.UpdateOne(ctx, bson.D{{Key: "_id", Value: p.Creditor.AccountID}},
 			bson.D{{Key: "$inc", Value: bson.D{{Key: "balance.available", Value: p.Amount}}},
@@ -164,7 +176,12 @@ func (s *Service) FinishIncoming(ctx context.Context, endToEndID, state, reason 
 	if err != nil {
 		return err
 	}
-	s.received.Add(ctx, 1, metric.WithAttributes(attribute.String("state", state), attribute.String("reason", reason)))
+	if pix.IsReturnID(endToEndID) {
+		s.returnsFinished.Add(ctx, 1, metric.WithAttributes(attribute.String("direction", DirectionIn),
+			attribute.String("state", state), attribute.String("reason", reason)))
+	} else {
+		s.received.Add(ctx, 1, metric.WithAttributes(attribute.String("state", state), attribute.String("reason", reason)))
+	}
 	slog.InfoContext(ctx, "recebimento finalizado", "end_to_end_id", endToEndID, "state", state, "reason", reason,
 		"amount", p.Amount.String())
 	return nil

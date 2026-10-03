@@ -169,7 +169,8 @@ func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 		return
 	}
-	if _, err := pix.ParseEndToEndID(req.EndToEndId); err != nil || req.Amount <= 0 ||
+	// A liquidação serve ao Pix ("E...") e à devolução ("D...").
+	if _, _, err := pix.ParseTransactionID(req.EndToEndId); err != nil || req.Amount <= 0 ||
 		!pix.ValidISPB(req.DebtorISPB) || !pix.ValidISPB(req.CreditorISPB) || req.DebtorISPB == req.CreditorISPB {
 		httpx.WriteError(w, http.StatusBadRequest, CodeInvalidRequest, "endToEndId, ISPBs distintos e valor positivo são obrigatórios")
 		return

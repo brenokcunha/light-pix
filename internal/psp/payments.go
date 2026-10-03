@@ -52,12 +52,17 @@ type Service struct {
 	ispb  string
 	store *Store
 	keys  KeyResolver
+	// ReturnWindow é o prazo para devolver um Pix recebido (padrão: 90 dias).
+	ReturnWindow time.Duration
 
 	tracer   trace.Tracer
 	created  metric.Int64Counter
 	finished metric.Int64Counter
 	received metric.Int64Counter
 	duration metric.Float64Histogram
+	// returnsFinished conta devoluções encerradas; ficam fora das métricas de Pix
+	// para não entrar nos SLOs.
+	returnsFinished metric.Int64Counter
 }
 
 // NewService cria o serviço do PSP identificado por ispb.
@@ -78,6 +83,10 @@ func NewService(ispb string, st *Store, keys KeyResolver) (*Service, error) {
 	}
 	if s.received, err = meter.Int64Counter("pix.receipts",
 		metric.WithDescription("Pix recebidos, por estado alcançado (ACCEPTED, REJECTED, CREDITED)")); err != nil {
+		return nil, err
+	}
+	if s.returnsFinished, err = meter.Int64Counter("pix.returns.finished",
+		metric.WithDescription("Devoluções que chegaram a um estado final, por sentido, estado e motivo")); err != nil {
 		return nil, err
 	}
 	s.duration, err = meter.Float64Histogram("pix.payment.duration", metric.WithUnit("s"),
@@ -256,14 +265,14 @@ func (s *Service) replay(ctx context.Context, scope, key, hash string) (Payment,
 	case ik.RequestHash != hash:
 		return Payment{}, false, newError(http.StatusUnprocessableEntity, "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key já usada com outro pedido")
 	}
-	p, err := s.store.FindPayment(ctx, ik.EndToEndID)
+	p, err := s.store.FindTx(ctx, ik.EndToEndID)
 	if err != nil {
 		return Payment{}, false, fmt.Errorf("pagamento %s da chave de idempotência: %w", ik.EndToEndID, err)
 	}
 	return p, true, nil
 }
 
-func requestHash(req CreateRequest) string {
+func requestHash(req any) string {
 	b, _ := json.Marshal(req)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])

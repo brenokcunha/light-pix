@@ -20,7 +20,8 @@ const (
 // Relê a transação, porque a cópia que o fluxo carrega é anterior às
 // mudanças de estado. Fila cheia descarta: medição não pode travar o Pix.
 func (s *Server) queueIGA(ctx context.Context, tx Transaction, status, reason string, now time.Time) {
-	if s.cfg.IGA == nil {
+	// O IGA mede Pix; devoluções têm identificador "D..." e ficam de fora.
+	if s.cfg.IGA == nil || tx.Kind == KindReturn {
 		return
 	}
 	var fresh Transaction

@@ -83,8 +83,8 @@ func (c *Connector) HandleOut(ctx context.Context, d amqp.Delivery) error {
 	err := c.spi.Send(ctx, c.ispb, env)
 	if err == nil {
 		c.leak()
-		if env.AppHdr.MsgDefIdr == iso20022.MsgPacs008 && env.FIToFICstmrCdtTrf != nil {
-			return c.svc.MarkSent(ctx, env.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId)
+		if id := originatedID(env); id != "" {
+			return c.svc.MarkSent(ctx, id)
 		}
 		return nil
 	}
@@ -96,19 +96,41 @@ func (c *Connector) HandleOut(ctx context.Context, d amqp.Delivery) error {
 	// O SPI disse não, e dizer de novo não muda a resposta.
 	slog.ErrorContext(ctx, "SPI recusou a mensagem", "msg_type", env.AppHdr.MsgDefIdr, "status", apiErr.Status, "code", apiErr.Code, "message", apiErr.Message)
 	span.SetStatus(codes.Error, apiErr.Error())
-	if env.AppHdr.MsgDefIdr != iso20022.MsgPacs008 || env.FIToFICstmrCdtTrf == nil {
+	e2e := originatedID(env)
+	if e2e == "" {
 		return nil // pacs.002 recusada: nada a desfazer neste PSP
 	}
-	e2e := env.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId
 	if apiErr.Status == http.StatusConflict {
-		// EndToEndId já em uso por outra mensagem: não tocar no pagamento.
+		// Identificador já em uso por outra mensagem: não tocar no pagamento.
 		return nil
 	}
-	reason := iso20022.ReasonSettlementFailed
-	if apiErr.Code == "UNKNOWN_PARTICIPANT" {
-		reason = iso20022.ReasonInvalidAccount
+	return c.svc.Finish(ctx, e2e, StateRejected, rejectionReason(apiErr.Code), nil)
+}
+
+// originatedID devolve o identificador do Pix (pacs.008) ou da devolução
+// (pacs.004) que a mensagem inicia, ou vazio se for outro tipo de mensagem.
+func originatedID(env iso20022.Envelope) string {
+	switch {
+	case env.AppHdr.MsgDefIdr == iso20022.MsgPacs008 && env.FIToFICstmrCdtTrf != nil:
+		return env.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId
+	case env.AppHdr.MsgDefIdr == iso20022.MsgPacs004 && env.PmtRtr != nil:
+		return env.PmtRtr.TxInf.RtrId
 	}
-	return c.svc.Finish(ctx, e2e, StateRejected, reason, nil)
+	return ""
+}
+
+// rejectionReason traduz a recusa definitiva do SPI no motivo de RJCT do Pix
+// ou da devolução.
+func rejectionReason(code string) string {
+	switch code {
+	case "UNKNOWN_PARTICIPANT":
+		return iso20022.ReasonInvalidAccount
+	case "RETURN_AMOUNT_EXCEEDED":
+		return iso20022.ReasonAmountInvalid
+	case "UNKNOWN_END_TO_END_ID", "ORIGINAL_NOT_SETTLED", "RETURN_WINDOW_EXPIRED", "FORBIDDEN", "INVALID_MESSAGE":
+		return iso20022.ReasonInconsistent
+	}
+	return iso20022.ReasonSettlementFailed
 }
 
 // Pull traz do SPI as mensagens destinadas a este PSP e as publica no
@@ -157,7 +179,9 @@ func (c *Connector) forward(ctx context.Context, msgs []spi.Delivery) error {
 func (c *Connector) forwardOne(ctx context.Context, m spi.Delivery) error {
 	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(m.TraceContext))
 	key := broker.QueueResults
-	if m.Envelope.AppHdr.MsgDefIdr == iso20022.MsgPacs008 {
+	// Ordens de crédito (pacs.008, pacs.004) vão para o incoming-worker; status
+	// (pacs.002), para o result-worker.
+	if t := m.Envelope.AppHdr.MsgDefIdr; t == iso20022.MsgPacs008 || t == iso20022.MsgPacs004 {
 		key = broker.QueueIncoming
 	}
 	ctx, span := c.tracer.Start(ctx, "spi.deliver "+m.Envelope.AppHdr.MsgDefIdr, trace.WithSpanKind(trace.SpanKindProducer),

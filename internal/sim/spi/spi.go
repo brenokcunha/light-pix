@@ -58,6 +58,7 @@ type Config struct {
 	SweepInterval   time.Duration // varredura de prazos vencidos e liquidações pendentes
 	SettleRetry     time.Duration // idade mínima de uma liquidação parada para nova tentativa
 	Settler         Settler
+	ReturnWindow    time.Duration // prazo para devolver um Pix liquidado (90 dias)
 	// IGA, se definido, recebe os instantes de cada transação encerrada, em
 	// lotes e sem bloquear o fluxo: é um canal de medição, não de negócio.
 	IGA IGAReporter
@@ -68,15 +69,21 @@ type Config struct {
 
 // Transaction é o registro da transação no SPI.
 type Transaction struct {
-	EndToEndId   string            `bson:"_id"`
-	MsgId        string            `bson:"msgId"` // MsgId da pacs.008 original
-	DebtorISPB   string            `bson:"debtorIspb"`
-	CreditorISPB string            `bson:"creditorIspb"`
-	Amount       pix.Amount        `bson:"amount"`
-	Status       string            `bson:"status"`
-	Reason       string            `bson:"reason,omitempty"`
-	TraceContext map[string]string `bson:"traceContext,omitempty"`
-	ReceivedAt   time.Time         `bson:"receivedAt"`
+	EndToEndId   string     `bson:"_id"`
+	MsgId        string     `bson:"msgId"` // MsgId da pacs.008 original
+	DebtorISPB   string     `bson:"debtorIspb"`
+	CreditorISPB string     `bson:"creditorIspb"`
+	Amount       pix.Amount `bson:"amount"`
+	// Kind é vazio num Pix e "RETURN" numa devolução (então o _id é o "D..."
+	// e OriginalEndToEndID aponta para o Pix devolvido).
+	Kind               string `bson:"kind,omitempty"`
+	OriginalEndToEndID string `bson:"originalEndToEndId,omitempty"`
+	// ReturnedAmount, num Pix, é o valor já devolvido ou em devolução.
+	ReturnedAmount pix.Amount        `bson:"returnedAmount,omitempty"`
+	Status         string            `bson:"status"`
+	Reason         string            `bson:"reason,omitempty"`
+	TraceContext   map[string]string `bson:"traceContext,omitempty"`
+	ReceivedAt     time.Time         `bson:"receivedAt"`
 	// NotForwarded marca a transação que o SPI não encaminhou ao recebedor
 	// (falha injetada): no timeout, o recebedor não é avisado do que não viu.
 	NotForwarded bool       `bson:"notForwarded,omitempty"`
@@ -223,10 +230,14 @@ func (s *Server) receive(ctx context.Context, ispb string, env iso20022.Envelope
 		return newAPIError(http.StatusBadRequest, "INVALID_MESSAGE", "AppHdr.To deve ser o SPI (%s)", pix.BCBISPB)
 	}
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String("pix.msg_type", env.AppHdr.MsgDefIdr))
-	if env.AppHdr.MsgDefIdr == iso20022.MsgPacs008 {
+	switch env.AppHdr.MsgDefIdr {
+	case iso20022.MsgPacs008:
 		return s.receivePacs008(ctx, env)
+	case iso20022.MsgPacs004:
+		return s.receivePacs004(ctx, env)
+	default:
+		return s.receivePacs002(ctx, env)
 	}
-	return s.receivePacs002(ctx, env)
 }
 
 // receivePacs008 registra a transação e a encaminha ao recebedor na mesma
@@ -369,6 +380,13 @@ func (s *Server) reject(ctx context.Context, tx Transaction, from, reason string
 		if changed = err == nil && res.ModifiedCount == 1; !changed {
 			return err
 		}
+		// Devolução rejeitada libera o valor que ela reservava do Pix original.
+		if tx.Kind == KindReturn {
+			if _, err := s.txs.UpdateOne(ctx, bson.D{{Key: "_id", Value: tx.OriginalEndToEndID}},
+				bson.D{{Key: "$inc", Value: bson.D{{Key: "returnedAmount", Value: -tx.Amount}}}}); err != nil {
+				return err
+			}
+		}
 		st := iso20022.TxInfAndSts{
 			OrgnlEndToEndId: tx.EndToEndId,
 			TxSts:           iso20022.StatusRejected,
@@ -476,6 +494,9 @@ func (s *Server) enqueueStatus(ctx context.Context, tx Transaction, st iso20022.
 			continue
 		}
 		env := iso20022.NewPacs002Envelope(pix.BCBISPB, to, tx.MsgId, st, now)
+		if tx.Kind == KindReturn {
+			env.FIToFIPmtStsRpt.OrgnlGrpInfAndSts.OrgnlMsgNmId = iso20022.MsgPacs004
+		}
 		if err := s.enqueue(ctx, to, env, tc, now); err != nil {
 			return err
 		}

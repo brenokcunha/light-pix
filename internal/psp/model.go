@@ -114,22 +114,30 @@ type Transition struct {
 
 // Payment é um Pix. O _id é o EndToEndId.
 type Payment struct {
-	EndToEndID  string       `bson:"_id" json:"endToEndId"`
-	Direction   string       `bson:"direction" json:"direction"`
-	State       string       `bson:"state" json:"state"`
-	Amount      pix.Amount   `bson:"amount" json:"amount"`
-	Description string       `bson:"description,omitempty" json:"description,omitempty"`
-	Debtor      Party        `bson:"debtor" json:"debtor"`
-	Creditor    Party        `bson:"creditor" json:"creditor"`
-	MsgID       string       `bson:"msgId" json:"-"` // MsgId da pacs.008
-	Reason      string       `bson:"reason,omitempty" json:"reason,omitempty"`
-	History     []Transition `bson:"history" json:"history"`
-	CreatedAt   time.Time    `bson:"createdAt" json:"createdAt"` // OUT: t0, o pedido chegou à API; IN: a pacs.008 chegou
-	SentAt      *time.Time   `bson:"sentAt,omitempty" json:"sentAt,omitempty"`
-	AcceptedAt  *time.Time   `bson:"acceptedAt,omitempty" json:"acceptedAt,omitempty"` // IN: ACSP enviado
-	SettledAt   *time.Time   `bson:"settledAt,omitempty" json:"settledAt,omitempty"`
-	FinishedAt  *time.Time   `bson:"finishedAt,omitempty" json:"finishedAt,omitempty"`
-	UpdatedAt   time.Time    `bson:"updatedAt" json:"updatedAt"`
+	EndToEndID  string     `bson:"_id" json:"endToEndId"`
+	Direction   string     `bson:"direction" json:"direction"`
+	State       string     `bson:"state" json:"state"`
+	Amount      pix.Amount `bson:"amount" json:"amount"`
+	Description string     `bson:"description,omitempty" json:"description,omitempty"`
+	Debtor      Party      `bson:"debtor" json:"debtor"`
+	Creditor    Party      `bson:"creditor" json:"creditor"`
+	MsgID       string     `bson:"msgId" json:"-"` // MsgId da pacs.008 (ou da pacs.004, numa devolução)
+	// ReturnOf, numa devolução, é o EndToEndId do Pix devolvido; ReturnReason, o
+	// motivo (BE08, MD06...). Devoluções ficam na coleção returns, com o
+	// identificador "D..." no _id.
+	ReturnOf     string `bson:"returnOf,omitempty" json:"returnOf,omitempty"`
+	ReturnReason string `bson:"returnReason,omitempty" json:"returnReason,omitempty"`
+	// ReturnedAmount, num Pix, é o valor já devolvido ou em devolução: o teto é o
+	// valor do Pix, e cada devolução o reserva de forma atômica.
+	ReturnedAmount pix.Amount   `bson:"returnedAmount,omitempty" json:"returnedAmount,omitempty"`
+	Reason         string       `bson:"reason,omitempty" json:"reason,omitempty"`
+	History        []Transition `bson:"history" json:"history"`
+	CreatedAt      time.Time    `bson:"createdAt" json:"createdAt"` // OUT: t0, o pedido chegou à API; IN: a pacs.008 chegou
+	SentAt         *time.Time   `bson:"sentAt,omitempty" json:"sentAt,omitempty"`
+	AcceptedAt     *time.Time   `bson:"acceptedAt,omitempty" json:"acceptedAt,omitempty"` // IN: ACSP enviado
+	SettledAt      *time.Time   `bson:"settledAt,omitempty" json:"settledAt,omitempty"`
+	FinishedAt     *time.Time   `bson:"finishedAt,omitempty" json:"finishedAt,omitempty"`
+	UpdatedAt      time.Time    `bson:"updatedAt" json:"updatedAt"`
 }
 
 // IdempotencyKey liga uma Idempotency-Key (por conta) ao pagamento criado.

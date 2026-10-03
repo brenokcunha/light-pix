@@ -1,5 +1,5 @@
 // Package iso20022 define as mensagens do SPI usadas no laboratório: pacs.008
-// (ordem de pagamento) e pacs.002 (status). O formato é JSON com os nomes de
+// (ordem de pagamento), pacs.002 (status) e pacs.004 (devolução). O formato é JSON com os nomes de
 // campo do ISO 20022, só com os campos usados; estruturas profundas do padrão
 // (ex.: Dbtr.Id.PrvtId.Othr.Id) foram achatadas e estão indicadas.
 package iso20022
@@ -16,6 +16,7 @@ import (
 const (
 	MsgPacs008 = "pacs.008"
 	MsgPacs002 = "pacs.002"
+	MsgPacs004 = "pacs.004"
 )
 
 // Status da transação (TxSts).
@@ -33,7 +34,26 @@ const (
 	ReasonInvalidAccount    = "AC03" // conta do recebedor inexistente
 	ReasonBlockedAccount    = "AC06" // conta do recebedor bloqueada
 	ReasonSettlementFailed  = "ED05" // falha na liquidação
+	ReasonAmountInvalid     = "AM09" // valor da devolução acima do que resta do Pix original
+	ReasonInconsistent      = "BE01" // devolução inconsistente com o Pix original
 )
+
+// Motivos de devolução (RtrRsnInf.Rsn).
+const (
+	ReturnBankError       = "BE08" // erro do PSP
+	ReturnFraud           = "FR01" // fraude (MED)
+	ReturnCustomerRequest = "MD06" // solicitação de reembolso do cliente
+	ReturnSpecial         = "SL02" // devolução especial
+)
+
+// ValidReturnReason diz se o motivo é um dos aceitos no laboratório.
+func ValidReturnReason(r string) bool {
+	switch r {
+	case ReturnBankError, ReturnFraud, ReturnCustomerRequest, ReturnSpecial:
+		return true
+	}
+	return false
+}
 
 // Envelope é a unidade trafegada com o SPI: cabeçalho de aplicação (head.001)
 // e exatamente um documento.
@@ -41,6 +61,7 @@ type Envelope struct {
 	AppHdr            AppHdr   `json:"AppHdr"`
 	FIToFICstmrCdtTrf *Pacs008 `json:"FIToFICstmrCdtTrf,omitempty"`
 	FIToFIPmtStsRpt   *Pacs002 `json:"FIToFIPmtStsRpt,omitempty"`
+	PmtRtr            *Pacs004 `json:"PmtRtr,omitempty"`
 }
 
 // AppHdr identifica remetente, destinatário e tipo da mensagem.
@@ -142,6 +163,45 @@ type StsRsnInf struct {
 	AddtlInf string `json:"AddtlInf,omitempty"`
 }
 
+// Pacs004 é a devolução: o recebedor do Pix original devolve o valor (todo ou
+// parte) ao pagador. Segue o mesmo caminho da pacs.008: SPI → pagador original
+// (que responde com pacs.002) → liquidação na conta PI.
+type Pacs004 struct {
+	GrpHdr GrpHdr   `json:"GrpHdr"`
+	TxInf  RtrTxInf `json:"TxInf"`
+}
+
+// RtrTxInf descreve a devolução. Dbtr é quem devolve (o recebedor do Pix
+// original) e Cdtr quem recebe a devolução (o pagador original).
+type RtrTxInf struct {
+	RtrId              string                  `json:"RtrId"`           // identificador da devolução ("D...")
+	OrgnlEndToEndId    string                  `json:"OrgnlEndToEndId"` // Pix devolvido
+	RtrdIntrBkSttlmAmt ActiveCurrencyAndAmount `json:"RtrdIntrBkSttlmAmt"`
+	RtrRsnInf          RtrRsnInf               `json:"RtrRsnInf"`
+	Dbtr               Party                   `json:"Dbtr"`
+	DbtrAcct           Account                 `json:"DbtrAcct"`
+	DbtrAgt            Agent                   `json:"DbtrAgt"`
+	Cdtr               Party                   `json:"Cdtr"`
+	CdtrAcct           Account                 `json:"CdtrAcct"`
+	CdtrAgt            Agent                   `json:"CdtrAgt"`
+}
+
+// RtrRsnInf é o motivo da devolução.
+type RtrRsnInf struct {
+	Rsn      string `json:"Rsn"`
+	AddtlInf string `json:"AddtlInf,omitempty"`
+}
+
+// NewPacs004Envelope embrulha a devolução com AppHdr de quem devolve para o SPI.
+func NewPacs004Envelope(tx RtrTxInf, now time.Time) Envelope {
+	from := tx.DbtrAgt.MmbId
+	msgID := pix.NewMsgID(from)
+	return Envelope{
+		AppHdr: AppHdr{Fr: from, To: pix.BCBISPB, BizMsgIdr: msgID, MsgDefIdr: MsgPacs004, CreDt: now.UTC()},
+		PmtRtr: &Pacs004{GrpHdr: GrpHdr{MsgId: msgID, CreDtTm: now.UTC()}, TxInf: tx},
+	}
+}
+
 // NewPacs008Envelope embrulha a pacs.008 com AppHdr do pagador para o SPI.
 func NewPacs008Envelope(tx CdtTrfTxInf, now time.Time) Envelope {
 	from := tx.DbtrAgt.MmbId
@@ -181,6 +241,11 @@ func (e Envelope) Validate() error {
 			return errors.New("iso20022: pacs.008 sem documento FIToFICstmrCdtTrf")
 		}
 		return e.FIToFICstmrCdtTrf.CdtTrfTxInf.validate()
+	case MsgPacs004:
+		if e.PmtRtr == nil || e.FIToFICstmrCdtTrf != nil || e.FIToFIPmtStsRpt != nil {
+			return errors.New("iso20022: pacs.004 sem documento PmtRtr")
+		}
+		return e.PmtRtr.TxInf.validate()
 	case MsgPacs002:
 		if e.FIToFIPmtStsRpt == nil || e.FIToFICstmrCdtTrf != nil {
 			return errors.New("iso20022: pacs.002 sem documento FIToFIPmtStsRpt")
@@ -208,8 +273,33 @@ func (tx CdtTrfTxInf) validate() error {
 	return nil
 }
 
+func (tx RtrTxInf) validate() error {
+	returner, err := pix.ParseReturnID(tx.RtrId)
+	switch {
+	case err != nil:
+		return err
+	case returner != tx.DbtrAgt.MmbId:
+		return errors.New("iso20022: RtrId não pertence ao DbtrAgt")
+	}
+	if _, err := pix.ParseEndToEndID(tx.OrgnlEndToEndId); err != nil {
+		return err
+	}
+	switch {
+	case tx.RtrdIntrBkSttlmAmt.Ccy != "BRL" || tx.RtrdIntrBkSttlmAmt.Value <= 0:
+		return errors.New("iso20022: RtrdIntrBkSttlmAmt deve ser positivo em BRL")
+	case !pix.ValidISPB(tx.CdtrAgt.MmbId) || tx.CdtrAgt.MmbId == tx.DbtrAgt.MmbId:
+		return errors.New("iso20022: CdtrAgt inválido")
+	case tx.CdtrAcct.Issr == "" || tx.CdtrAcct.Id == "":
+		return errors.New("iso20022: CdtrAcct incompleta")
+	case !ValidReturnReason(tx.RtrRsnInf.Rsn):
+		return fmt.Errorf("iso20022: motivo de devolução inválido: %q", tx.RtrRsnInf.Rsn)
+	}
+	return nil
+}
+
 func (st TxInfAndSts) validate() error {
-	if _, err := pix.ParseEndToEndID(st.OrgnlEndToEndId); err != nil {
+	// O status refere-se a um Pix ("E...") ou a uma devolução ("D...").
+	if _, _, err := pix.ParseTransactionID(st.OrgnlEndToEndId); err != nil {
 		return err
 	}
 	switch st.TxSts {

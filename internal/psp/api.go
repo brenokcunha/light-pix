@@ -33,6 +33,9 @@ func NewAPI(svc *Service, keys KeyRegistry) *API { return &API{svc: svc, keys: k
 func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/pix/payments", a.handleCreatePayment)
 	mux.HandleFunc("GET /v1/pix/payments/{endToEndId}", a.handleGetPayment)
+	mux.HandleFunc("POST /v1/pix/payments/{endToEndId}/returns", a.handleCreateReturn)
+	mux.HandleFunc("GET /v1/pix/payments/{endToEndId}/returns", a.handleListReturns)
+	mux.HandleFunc("GET /v1/pix/returns/{returnId}", a.handleGetReturn)
 	mux.HandleFunc("GET /v1/accounts/{branch}/{number}", a.handleGetAccount)
 	mux.HandleFunc("POST /v1/keys", a.handleRegisterKey)
 	mux.HandleFunc("DELETE /v1/keys/{key}", a.handleRemoveKey)
@@ -56,6 +59,44 @@ func (a *API) handleCreatePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, p)
+}
+
+func (a *API) handleCreateReturn(w http.ResponseWriter, r *http.Request) {
+	var req ReturnRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+	ret, created, err := a.svc.CreateReturn(r.Context(), r.PathValue("endToEndId"), r.Header.Get("Idempotency-Key"), req)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	w.Header().Set("Location", "/v1/pix/returns/"+ret.EndToEndID)
+	if !created {
+		w.Header().Set("Idempotent-Replayed", "true")
+		httpx.WriteJSON(w, http.StatusOK, ret)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, ret)
+}
+
+func (a *API) handleGetReturn(w http.ResponseWriter, r *http.Request) {
+	ret, err := a.svc.GetReturn(r.Context(), r.PathValue("returnId"))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, ret)
+}
+
+func (a *API) handleListReturns(w http.ResponseWriter, r *http.Request) {
+	list, err := a.svc.ListReturns(r.Context(), r.PathValue("endToEndId"))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, list)
 }
 
 func (a *API) handleGetPayment(w http.ResponseWriter, r *http.Request) {
