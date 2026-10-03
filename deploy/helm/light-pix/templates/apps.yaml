@@ -1,0 +1,123 @@
+{{- /*
+  Os cinco papéis de cada PSP (api, relay, connector, worker, resolver): uma
+  imagem, um Deployment por papel e PSP, para escalar e reiniciar de forma
+  independente. Só a api e o resolver têm Service (as demais só falam para fora).
+*/ -}}
+{{- range $psp := .Values.psps }}
+{{- range $name, $role := $.Values.roles }}
+{{- $full := printf "%s-%s" $psp.name $name }}
+{{- $hpa := and $role.hpa $role.hpa.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}
+  labels:
+    {{- include "lp.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: {{ $full }}
+    lightpix/psp: {{ $psp.name }}
+    lightpix/role: {{ $name }}
+spec:
+  {{- if not $hpa }}
+  replicas: {{ $role.replicas }}
+  {{- end }}
+  {{- if eq (int $role.replicas) 1 }}
+  strategy:
+    type: Recreate # uma réplica só: nunca dois relays/resolvers ao mesmo tempo
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $full }}
+  template:
+    metadata:
+      labels:
+        {{- include "lp.labels" $ | nindent 8 }}
+        app.kubernetes.io/name: {{ $full }}
+        lightpix/psp: {{ $psp.name }}
+        lightpix/role: {{ $name }}
+    spec:
+      terminationGracePeriodSeconds: 30
+      initContainers:
+        {{- include "lp.waitMongo" $ | nindent 8 }}
+      containers:
+        - name: app
+          image: {{ $.Values.images.psp }}
+          imagePullPolicy: {{ $.Values.pullPolicy }}
+          args: [{{ $name }}]
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            {{- include "lp.otelEnv" $ | nindent 12 }}
+            - { name: OTEL_RESOURCE_ATTRIBUTES, value: "psp.ispb={{ $psp.ispb }},psp.name={{ $psp.name }},deployment.environment.name={{ $.Values.environment }}" }
+            - { name: PSP_ISPB, value: {{ $psp.ispb | quote }} }
+            - { name: MONGO_URI, value: "mongodb://mongo-0.mongo:27017/?replicaSet=rs0" }
+            - { name: MONGO_DB, value: {{ $psp.db | quote }} }
+            - { name: RABBITMQ_URL, value: "amqp://{{ $.Values.rabbitmq.user }}:{{ $.Values.rabbitmq.password }}@rabbitmq:5672/{{ $psp.vhost }}" }
+            - { name: DICT_URL, value: "http://dict-sim:8080" }
+            {{- range $k, $v := $role.env }}
+            - { name: {{ $k }}, value: {{ $v | quote }} }
+            {{- end }}
+          securityContext:
+            {{- include "lp.securityContext" $ | nindent 12 }}
+          {{- include "lp.probes" $ | nindent 10 }}
+          resources:
+            {{- toYaml $role.resources | nindent 12 }}
+          {{- if $role.seeds }}
+          volumeMounts:
+            - { name: seeds, mountPath: /etc/seeds, readOnly: true }
+          {{- end }}
+      {{- if $role.seeds }}
+      volumes:
+        - name: seeds
+          configMap: { name: seeds }
+      {{- end }}
+{{- if $role.expose }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}
+  labels:
+    {{- include "lp.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: {{ $full }}
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: {{ $full }}
+  ports:
+    - { name: http, port: 8080, targetPort: http, nodePort: {{ index $psp.nodePorts $name }} }
+{{- end }}
+{{- if $hpa }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $full }}
+  labels:
+    {{- include "lp.labels" $ | nindent 4 }}
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: {{ $full }} }
+  minReplicas: {{ $role.hpa.min }}
+  maxReplicas: {{ $role.hpa.max }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: {{ $role.hpa.cpu }} }
+{{- end }}
+{{- if and $role.pdb (gt (int $role.replicas) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $full }}
+  labels:
+    {{- include "lp.labels" $ | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $full }}
+{{- end }}
+{{- end }}
+{{- end }}

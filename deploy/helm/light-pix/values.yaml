@@ -1,0 +1,142 @@
+# Valores do laboratório em Kubernetes (kind). As imagens Go são construídas
+# pelo Compose e carregadas no cluster com `kind load docker-image`, por isso
+# a política de pull é IfNotPresent e as tags são ":dev".
+images:
+  psp: light-pix/psp:dev
+  spiSim: light-pix/spi-sim:dev
+  dictSim: light-pix/dict-sim:dev
+  bacenSim: light-pix/bacen-sim:dev
+  mongo: mongo:8.0
+  rabbitmq: rabbitmq:4.3-management
+  otelCollector: otel/opentelemetry-collector-contrib:0.161.0
+  tempo: grafana/tempo:3.1.0
+  mongodbExporter: percona/mongodb_exporter:0.53.0
+pullPolicy: IfNotPresent
+
+# Valor de deployment.environment.name nos sinais.
+environment: k8s
+
+# Onde o kube-prometheus-stack (release "kps", namespace monitoring) escuta.
+monitoring:
+  prometheusURL: http://kps-prometheus.monitoring.svc:9090
+  # Cria ServiceMonitors (RabbitMQ e MongoDB) e PrometheusRules: exige as CRDs do
+  # kube-prometheus-stack; desligue se instalar o chart sem ele.
+  enabled: true
+
+rabbitmq:
+  user: lightpix
+  password: lightpix
+
+# % dos traces normais que o tail sampling do Collector guarda (erros e lentos: sempre).
+traceSamplePercent: 100
+
+# Os dois PSPs rodam o mesmo código; cada um tem banco e vhost próprios.
+psps:
+  - key: a
+    name: psp-a
+    ispb: "11111111"
+    db: psp_a
+    vhost: psp-a
+    nodePorts: { api: 30081, resolver: 30083 }
+  - key: b
+    name: psp-b
+    ispb: "22222222"
+    db: psp_b
+    vhost: psp-b
+    nodePorts: { api: 30082, resolver: 30084 }
+
+# Papéis de cada PSP. env é somado ao ambiente comum (ISPB, Mongo, RabbitMQ, OTel).
+roles:
+  api:
+    replicas: 2
+    expose: true
+    seeds: true
+    env:
+      PSP_ACCOUNTS_SEED_FILE: /etc/seeds/accounts-seed.json
+    resources: &small
+      requests: { cpu: 50m, memory: 48Mi }
+      limits: { memory: 256Mi }
+    # Escala por CPU (exige o metrics-server).
+    hpa: { enabled: true, min: 2, max: 6, cpu: 70 }
+    pdb: true
+  relay:
+    replicas: 1 # um relay por PSP: mais réplicas só publicariam em dobro
+    resources: *small
+  connector:
+    replicas: 1
+    env:
+      SPI_URL: http://spi-sim:8080
+      SPI_POLL_WAIT: 20s
+      WORKER_CONCURRENCY: "16"
+    resources: *small
+  worker:
+    replicas: 2
+    resources: *small
+    pdb: true
+  resolver:
+    replicas: 1
+    expose: true
+    env:
+      SPI_URL: http://spi-sim:8080
+      BACEN_URL: http://bacen-sim:8080
+      MED_INTERVAL: 10s
+      RESOLVER_INTERVAL: 10s
+      RESOLVER_MIN_AGE: 40s
+      RECONCILE_AT: "03:00"
+    resources: *small
+
+# Simuladores do BCB. Um banco cada, no mesmo MongoDB.
+sims:
+  spi:
+    image: spiSim
+    db: spi
+    nodePort: 30091
+    env:
+      BACEN_URL: http://bacen-sim:8080
+      SPI_PARTICIPANTS: "11111111,22222222"
+      SPI_CREDITOR_TIMEOUT: 10s
+      SPI_POLL_WAIT: 20s
+      SPI_LEASE: 30s
+  dict:
+    image: dictSim
+    db: dict
+    nodePort: 30092
+    seeds: true
+    env:
+      DICT_SEED_FILE: /etc/seeds/dict-seed.json
+      DICT_PAYER_BUCKET_CAPACITY: "100"
+      DICT_PAYER_REFILL_PER_MIN: "60"
+      DICT_NOT_FOUND_COST: "20"
+      DICT_ANALYSIS_DEADLINE: 72h
+  bacen:
+    image: bacenSim
+    db: bacen
+    nodePort: 30093
+    env:
+      BACEN_PI_ACCOUNTS: "11111111:1000000.00,22222222:1000000.00"
+
+simResources:
+  requests: { cpu: 50m, memory: 48Mi }
+  limits: { memory: 256Mi }
+
+infraResources:
+  mongo:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { memory: 1Gi }
+  rabbitmq:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 768Mi }
+  otelCollector:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+  tempo:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+  mongodbExporter:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 128Mi }
+
+storage:
+  mongo: 2Gi
+  rabbitmq: 1Gi
+  tempo: 2Gi

@@ -1,0 +1,158 @@
+{{- /* MongoDB (replica set de um nó) e RabbitMQ, ambos StatefulSets com volume. */ -}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+    app.kubernetes.io/name: mongo
+spec:
+  clusterIP: None # headless: dá o nome estável mongo-0.mongo
+  publishNotReadyAddresses: true # o replica set precisa resolver o próprio nome antes de ficar pronto
+  selector:
+    app.kubernetes.io/name: mongo
+  ports:
+    - { name: mongo, port: 27017 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+    app.kubernetes.io/name: mongo
+spec:
+  serviceName: mongo
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongo
+  template:
+    metadata:
+      labels:
+        {{- include "lp.labels" . | nindent 8 }}
+        app.kubernetes.io/name: mongo
+    spec:
+      containers:
+        - name: mongo
+          image: {{ .Values.images.mongo }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          args: ["--replSet", "rs0", "--bind_ip_all"]
+          ports:
+            - { name: mongo, containerPort: 27017 }
+          # Iniciado o processo, a prontidão inicia o replica set na primeira vez e
+          # só passa com um primário eleito (transações e change streams dependem disso).
+          readinessProbe:
+            exec:
+              command:
+                - mongosh
+                - --quiet
+                - --eval
+                - "try { if (rs.status().myState !== 1) quit(1) } catch (e) { rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'mongo-0.mongo.{{ .Release.Namespace }}.svc.cluster.local:27017'}]}); quit(1) }"
+            periodSeconds: 5
+            timeoutSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            tcpSocket: { port: mongo }
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.infraResources.mongo | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /data/db }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: { storage: {{ .Values.storage.mongo }} }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-config
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+data:
+  rabbitmq.conf: |-
+{{ .Files.Get "files/rabbitmq/rabbitmq.conf" | indent 4 }}
+  definitions.json: |-
+{{ .Files.Get "files/rabbitmq/definitions.json" | indent 4 }}
+  enabled_plugins: |-
+{{ .Files.Get "files/rabbitmq/enabled_plugins" | indent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+    app.kubernetes.io/name: rabbitmq
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: rabbitmq
+  ports:
+    - { name: amqp, port: 5672, targetPort: amqp }
+    - { name: management, port: 15672, targetPort: management, nodePort: 30672 }
+    - { name: metrics, port: 15692, targetPort: metrics }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+    app.kubernetes.io/name: rabbitmq
+spec:
+  serviceName: rabbitmq
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+  template:
+    metadata:
+      labels:
+        {{- include "lp.labels" . | nindent 8 }}
+        app.kubernetes.io/name: rabbitmq
+    spec:
+      securityContext:
+        fsGroup: 999 # grupo do usuário rabbitmq na imagem: dono do volume
+      containers:
+        - name: rabbitmq
+          image: {{ .Values.images.rabbitmq }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          ports:
+            - { name: amqp, containerPort: 5672 }
+            - { name: management, containerPort: 15672 }
+            - { name: metrics, containerPort: 15692 }
+          readinessProbe:
+            exec: { command: [rabbitmq-diagnostics, -q, ping] }
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            exec: { command: [rabbitmq-diagnostics, -q, ping] }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 15
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.infraResources.rabbitmq | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/rabbitmq }
+            - { name: config, mountPath: /etc/rabbitmq/rabbitmq.conf, subPath: rabbitmq.conf, readOnly: true }
+            - { name: config, mountPath: /etc/rabbitmq/definitions.json, subPath: definitions.json, readOnly: true }
+            - { name: config, mountPath: /etc/rabbitmq/enabled_plugins, subPath: enabled_plugins, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: rabbitmq-config }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: { storage: {{ .Values.storage.rabbitmq }} }

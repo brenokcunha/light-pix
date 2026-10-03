@@ -1,4 +1,4 @@
-.PHONY: up down reset ps logs build test test-integration vet fmt load faults slo dashboards runbooks scenarios
+.PHONY: up down reset ps logs build test test-integration vet fmt load faults slo dashboards runbooks scenarios k8s-tools k8s-sync k8s-up k8s-down k8s-status
 
 up: ## sobe a stack completa (rebuild das imagens Go)
 	docker compose up -d --build
@@ -65,3 +65,20 @@ runbooks: ## gera docs/runbooks
 # Cenários de incidente (cada um leva alguns minutos): make scenarios n="2 4"
 scenarios: ## reproduz os incidentes e confere os alertas (n="1 2" escolhe)
 	./scenarios/run.sh $(n)
+
+# Kubernetes (kind). Pare a stack do Compose antes: o cluster usa as mesmas portas.
+k8s-tools: ## baixa kind e helm para .tools/
+	./scripts/k8s_tools.sh
+
+k8s-sync: ## copia dashboards, regras e configs para o chart Helm
+	python scripts/k8s_sync.py
+
+k8s-up: ## cria o cluster kind e instala metrics-server, kube-prometheus-stack e o chart light-pix
+	./scripts/k8s_up.sh
+
+k8s-down: ## apaga o cluster kind
+	PATH="$(CURDIR)/.tools:$$PATH" kind delete cluster --name lightpix
+
+k8s-status: ## pods, HPA e alertas do cluster
+	kubectl -n lightpix get pods,hpa
+	kubectl -n monitoring get pods

@@ -122,6 +122,24 @@ curl -s -X POST http://localhost:8082/v1/infraction-reports/<id>/decision \
 O relato passa por `OPEN → AGREED → RETURNED` em A e `BLOCKED → AGREED → RETURNED` em B; o saldo
 de Bob mostra `blocked` enquanto o valor está retido (`GET /v1/accounts/0001/2000001`).
 
+## Kubernetes (kind)
+
+O mesmo laboratório roda num cluster kind, com um chart Helm e o kube-prometheus-stack
+(detalhes em [docs/arquitetura.md](docs/arquitetura.md), seção 15). Pare o Compose antes:
+o cluster usa as mesmas portas.
+
+```bash
+docker compose stop
+make k8s-tools     # baixa kind e helm para .tools/ (uma vez)
+make k8s-up        # cluster, imagens, metrics-server, kube-prometheus-stack e o chart
+make k8s-status    # pods, HPA e o namespace monitoring
+make k8s-down      # apaga o cluster; depois: docker compose up -d
+```
+
+Os endereços são os de sempre (API do PSP A em `localhost:8081`, Grafana em `localhost:3000`,
+Prometheus em `localhost:9090`). No cluster, os dashboards e as regras de alerta do repositório
+são os mesmos; a api escala sozinha por CPU (HPA) e os logs saem por `kubectl logs`.
+
 ## Dashboards, SLOs, alertas e runbooks
 
 - **Grafana** (`localhost:3000`): *Pix — visão IGA* (experiência do pagador, iniciação,

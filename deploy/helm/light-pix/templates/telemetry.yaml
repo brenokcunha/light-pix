@@ -1,0 +1,308 @@
+{{- /*
+  Coleta de telemetria: OpenTelemetry Collector (tail sampling; métricas vão ao
+  Prometheus do kube-prometheus-stack por OTLP, traces ao Tempo), Tempo e o
+  exporter do MongoDB. As configs espelham as do Compose
+  (deploy/observability/{otel-collector,tempo}); mudam só os endereços.
+*/ -}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 20
+      batch: {}
+      # Guarda 100% dos traces com erro ou lentos e só uma amostra dos normais.
+      tail_sampling:
+        decision_wait: 15s
+        num_traces: 50000
+        decision_cache:
+          sampled_cache_size: 100000
+        policies:
+          - name: erros
+            type: status_code
+            status_code:
+              status_codes: [ERROR]
+          - name: lentos
+            type: latency
+            latency:
+              threshold_ms: 1500
+          - name: amostra
+            type: probabilistic
+            probabilistic:
+              sampling_percentage: {{ .Values.traceSamplePercent }}
+    exporters:
+      otlp_grpc/tempo:
+        endpoint: tempo:4317
+        tls:
+          insecure: true
+      # Ingestão OTLP nativa do Prometheus (enableOTLPReceiver no kube-prometheus-stack).
+      otlp_http/prometheus:
+        endpoint: {{ .Values.monitoring.prometheusURL }}/api/v1/otlp
+        tls:
+          insecure: true
+    service:
+      telemetry:
+        metrics:
+          readers:
+            - pull:
+                exporter:
+                  prometheus:
+                    host: 0.0.0.0
+                    port: 8888
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, tail_sampling, batch]
+          exporters: [otlp_grpc/tempo]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp_http/prometheus]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+    app.kubernetes.io/name: otel-collector
+spec:
+  replicas: 1 # o tail sampling precisa ver o trace inteiro: uma réplica só
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  template:
+    metadata:
+      labels:
+        {{- include "lp.labels" . | nindent 8 }}
+        app.kubernetes.io/name: otel-collector
+      annotations:
+        # Reinicia o Collector quando os valores (inclusive a amostragem) mudam.
+        checksum/values: {{ toJson .Values | sha256sum | trunc 16 }}
+    spec:
+      containers:
+        - name: collector
+          image: {{ .Values.images.otelCollector }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          args: ["--config=/etc/otelcol/config.yaml"]
+          ports:
+            - { name: otlp-grpc, containerPort: 4317 }
+            - { name: otlp-http, containerPort: 4318 }
+            - { name: metrics, containerPort: 8888 }
+          readinessProbe:
+            tcpSocket: { port: otlp-grpc }
+          resources:
+            {{- toYaml .Values.infraResources.otelCollector | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/otelcol, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: otel-collector-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+    app.kubernetes.io/name: otel-collector
+spec:
+  selector:
+    app.kubernetes.io/name: otel-collector
+  ports:
+    - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc }
+    - { name: otlp-http, port: 4318, targetPort: otlp-http }
+    - { name: metrics, port: 8888, targetPort: metrics }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tempo-config
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+data:
+  tempo.yaml: |
+    stream_over_http_enabled: true
+    server:
+      http_listen_port: 3200
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+    backend_worker:
+      compaction:
+        block_retention: 72h
+    metrics_generator:
+      registry:
+        external_labels:
+          source: tempo
+      storage:
+        path: /var/tempo/generator/wal
+        remote_write:
+          - url: {{ .Values.monitoring.prometheusURL }}/api/v1/write
+            send_exemplars: true
+    storage:
+      trace:
+        backend: local
+        wal:
+          path: /var/tempo/wal
+        local:
+          path: /var/tempo/blocks
+    overrides:
+      defaults:
+        metrics_generator:
+          processors: [service-graphs, span-metrics]
+    usage_report:
+      reporting_enabled: false
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tempo-data
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: { storage: {{ .Values.storage.tempo }} }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tempo
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+    app.kubernetes.io/name: tempo
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # o volume é RWO
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tempo
+  template:
+    metadata:
+      labels:
+        {{- include "lp.labels" . | nindent 8 }}
+        app.kubernetes.io/name: tempo
+    spec:
+      securityContext:
+        fsGroup: 10001
+      containers:
+        - name: tempo
+          image: {{ .Values.images.tempo }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          args: ["-config.file=/etc/tempo/tempo.yaml"]
+          ports:
+            - { name: http, containerPort: 3200 }
+            - { name: otlp-grpc, containerPort: 4317 }
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.infraResources.tempo | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/tempo, readOnly: true }
+            - { name: data, mountPath: /var/tempo }
+      volumes:
+        - name: config
+          configMap: { name: tempo-config }
+        - name: data
+          persistentVolumeClaim: { claimName: tempo-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tempo
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+    app.kubernetes.io/name: tempo
+spec:
+  selector:
+    app.kubernetes.io/name: tempo
+  ports:
+    - { name: http, port: 3200, targetPort: http }
+    - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb-exporter
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+    app.kubernetes.io/name: mongodb-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongodb-exporter
+  template:
+    metadata:
+      labels:
+        {{- include "lp.labels" . | nindent 8 }}
+        app.kubernetes.io/name: mongodb-exporter
+    spec:
+      initContainers:
+        {{- include "lp.waitMongo" . | nindent 8 }}
+      containers:
+        - name: exporter
+          image: {{ .Values.images.mongodbExporter }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          args:
+            - --mongodb.uri=mongodb://mongo-0.mongo:27017/?directConnection=true
+            - --collect-all
+            - --compatible-mode
+          ports:
+            - { name: metrics, containerPort: 9216 }
+          resources:
+            {{- toYaml .Values.infraResources.mongodbExporter | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-exporter
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+    app.kubernetes.io/name: mongodb-exporter
+spec:
+  selector:
+    app.kubernetes.io/name: mongodb-exporter
+  ports:
+    - { name: metrics, port: 9216, targetPort: metrics }
+{{- if .Values.monitoring.enabled }}
+{{- range $svc := list "rabbitmq" "mongodb-exporter" "otel-collector" "tempo" }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $svc }}
+  labels:
+    {{- include "lp.labels" $ | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $svc }}
+  namespaceSelector:
+    matchNames: [{{ $.Release.Namespace }}]
+  endpoints:
+    - port: {{ if eq $svc "tempo" }}http{{ else }}metrics{{ end }}
+      interval: 15s
+{{- end }}
+{{- end }}

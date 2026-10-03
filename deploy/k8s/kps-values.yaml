@@ -1,0 +1,67 @@
+# kube-prometheus-stack para o laboratório: o Prometheus recebe as métricas dos
+# serviços por OTLP (via Collector) e por scrape (RabbitMQ, MongoDB, kubelet);
+# o Grafana carrega os dashboards do chart light-pix pelo sidecar.
+fullnameOverride: kps
+
+# Componentes do plano de controle do kind expõem métricas só em localhost; sem
+# isso viram alertas de "alvo fora do ar" que não dizem nada sobre o laboratório.
+kubeEtcd: { enabled: false }
+kubeScheduler: { enabled: false }
+kubeControllerManager: { enabled: false }
+kubeProxy: { enabled: false }
+nodeExporter: { enabled: false }
+defaultRules:
+  rules:
+    etcd: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeControllerManager: false
+    kubeProxy: false
+
+alertmanager:
+  service: { type: NodePort, nodePort: 30903 }
+
+prometheus:
+  service: { type: NodePort, nodePort: 30900 }
+  prometheusSpec:
+    retention: 2d
+    # OTLP dos serviços (Collector) e remote write do Tempo e do k6.
+    enableOTLPReceiver: true
+    enableRemoteWriteReceiver: true
+    otlp:
+      promoteResourceAttributes:
+        - service.version
+        - deployment.environment.name
+        - psp.ispb
+        - psp.name
+    tsdb:
+      outOfOrderTimeWindow: 30m
+    # Pega ServiceMonitors e regras de qualquer release, não só os do kps.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests: { cpu: 200m, memory: 512Mi }
+      limits: { memory: 1536Mi }
+
+grafana:
+  adminPassword: lightpix
+  service: { type: NodePort, nodePort: 30300 }
+  grafana.ini:
+    # Anônimo vê dashboards (Viewer); Explore e edição exigem admin / lightpix.
+    auth.anonymous:
+      enabled: true
+      org_role: Viewer
+  additionalDataSources:
+    - name: Tempo
+      uid: tempo
+      type: tempo
+      access: proxy
+      url: http://tempo.lightpix.svc:3200
+      jsonData:
+        serviceMap: { datasourceUid: prometheus }
+        nodeGraph: { enabled: true }
+        tracesToMetrics: { datasourceUid: prometheus }
+  resources:
+    requests: { cpu: 50m, memory: 192Mi }
+    limits: { memory: 512Mi }

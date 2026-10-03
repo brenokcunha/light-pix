@@ -403,6 +403,53 @@ conta PI conciliada). `make scenarios` roda os cinco; ver `scenarios/README.md`.
 4. DICT lento → circuit breaker abre, falha rápida.
 5. Conta PI sem saldo → rejeições `AM04`, alerta de liquidez.
 
+## 15. Kubernetes (kind)
+
+O mesmo laboratório roda num cluster kind de um nó, empacotado num chart Helm
+(`deploy/helm/light-pix`) mais o kube-prometheus-stack. Com a stack do Compose parada
+(mesmas portas, e a máquina não comporta as duas), `make k8s-tools` baixa kind e helm
+para `.tools/`, `make k8s-up` cria o cluster, carrega as imagens, instala metrics-server,
+kube-prometheus-stack (namespace `monitoring`, release `kps`) e o chart (namespace
+`lightpix`), e `make k8s-down` apaga o cluster. As portas do host são as do Compose
+(8081 a 8084, 8091 a 8093, Grafana 3000, Prometheus 9090, Alertmanager 9093, RabbitMQ 15672).
+
+| Compose | Kubernetes |
+|---|---|
+| `psp-{a,b}-{api,relay,connector,worker,resolver}` | um Deployment por papel e PSP (os mesmos 10), com Service NodePort só na api e no resolver |
+| `spi-sim`, `dict-sim`, `bacen-sim` | um Deployment e um Service cada |
+| `mongo` (replica set de 1 nó) | StatefulSet com volume; a sonda de prontidão inicia o replica set e só passa com primário eleito; Service headless `mongo-0.mongo` |
+| `rabbitmq` | StatefulSet com volume; vhosts e plugins por ConfigMap; Service com as portas AMQP, gestão e métricas |
+| `otel-collector`, `tempo` | Deployments (o Collector é uma réplica só: o tail sampling precisa ver o trace inteiro); métricas OTLP vão ao Prometheus do kps e traces ao Tempo |
+| `prometheus`, `alertmanager`, `grafana` | kube-prometheus-stack; o Prometheus recebe OTLP e remote write, e os dashboards e regras do repositório entram por ConfigMaps (sidecar do Grafana) e PrometheusRules |
+| `mongodb-exporter`, RabbitMQ `/metrics` | Deployment e ServiceMonitors |
+| cAdvisor | kubelet/cAdvisor e kube-state-metrics do kps |
+| `restart: unless-stopped`, healthchecks | probes (`startup`, `liveness` em `/healthz`, `readiness` em `/readyz`), kubelet reinicia |
+
+Decisões:
+
+- **Um chart para tudo que é nosso** (apps, Mongo, RabbitMQ, Collector, Tempo, exporters,
+  regras, dashboards); o kube-prometheus-stack é instalado antes, porque o chart cria
+  ServiceMonitors e PrometheusRules.
+- **Escala e disponibilidade:** a api tem HPA por CPU (2 a 6 réplicas, exige metrics-server) e
+  PodDisruptionBudget junto com o worker (`minAvailable: 1`); relay, resolver e simuladores
+  ficam em uma réplica com `Recreate` (dois relays publicariam em dobro; dois resolvers e dois
+  spi-sim disputariam o mesmo trabalho). Os consumidores são idempotentes, então réplicas do
+  worker e do connector são seguras.
+- **Segurança:** contêineres Go rodam com UID 65532 numérico (o Kubernetes não verifica o
+  `USER nonroot` por nome), `readOnlyRootFilesystem`, sem privilégios e sem capabilities.
+- **Imagens** vêm do Docker local (`kind load docker-image`), com `imagePullPolicy:
+  IfNotPresent`; um init container espera o primário do MongoDB antes de cada serviço subir.
+- **Cópias geradas:** o Helm só lê dentro do chart, então `make k8s-sync` copia dashboards,
+  regras, configuração do RabbitMQ e cargas iniciais para `deploy/helm/light-pix/files/`.
+- **Regras:** as que usam rótulos do Compose (cAdvisor) ficam de fora; reinício e OOM vêm das
+  regras padrão do kube-state-metrics. Os painéis de contêiner dos dashboards só têm dados no Compose.
+- **Fora do cluster:** Loki e Alloy (logs: `kubectl logs`), cenários e `make load`, que usam o
+  Compose; o k6 pode apontar para o cluster (`PSP_A_URL`, `PSP_B_URL`, `host.docker.internal`).
+
+Validado: Pix, devolução, consulta de métricas OTLP, alvos e regras no Prometheus, dashboards
+no Grafana e HPA com carga; num teste de caos a 10 Pix/s, matar connectors, relays e workers
+durante a carga não perdeu nenhum Pix (749 finalizados, conta PI conciliada sem divergência).
+
 ## 12. Estrutura do repositório
 
 ```
@@ -425,6 +472,8 @@ deploy/rabbitmq    vhosts, usuário e plugins
 deploy/sims        carga inicial do dict-sim
 deploy/psp         carga inicial das contas dos PSPs
 deploy/observability  otelcol, prometheus, alertmanager, tempo, loki, alloy, grafana
+deploy/helm        chart Helm do laboratório (light-pix) para o Kubernetes
+deploy/k8s         configuração do cluster kind e valores do kube-prometheus-stack
 deploy/slo         especificações Sloth (geradas) e janelas de alerta; as regras vão para deploy/observability/prometheus/rules
 loadtest           scripts k6
 scenarios          cenários de incidente (script + alertas esperados)
@@ -443,7 +492,7 @@ docs               arquitetura e runbooks
 | F4 | Retry/DLQ, pending-resolver (estados, DLQ, reconciliação diária) | `pacs.002` perdida e SPI com 5xx se resolvem sozinhos; reconciliação sem divergência |
 | F5 | Injeção de falhas nos simuladores + scripts k6 | carga sustentada com falhas configuráveis |
 | F6 | Dashboards, SLOs Sloth, alertas, runbooks, IGA no bacen-sim, cenários | os 5 cenários reproduzíveis e os alertas certos disparam |
-| F7 (opcional) | Devolução (`pacs.004`), MED 2.0, deploy em kind + kube-prometheus-stack | — |
+| F7 (opcional) | Devolução (`pacs.004`), MED 2.0, deploy em kind + kube-prometheus-stack | feito: devolução (6.3), MED (6.4) e Kubernetes (15) |
 
 ## 14. Decisões e premissas
 

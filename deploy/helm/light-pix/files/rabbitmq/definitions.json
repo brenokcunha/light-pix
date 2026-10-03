@@ -1,0 +1,20 @@
+{
+  "users": [
+    {
+      "name": "lightpix",
+      "password_hash": "EvzIMkC3hRxM4Cop0KFyAzeTL8sl+9xVA0jZqIt6n2pncoYD",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": ["administrator"]
+    }
+  ],
+  "vhosts": [
+    { "name": "/" },
+    { "name": "psp-a", "default_queue_type": "quorum" },
+    { "name": "psp-b", "default_queue_type": "quorum" }
+  ],
+  "permissions": [
+    { "user": "lightpix", "vhost": "/", "configure": ".*", "write": ".*", "read": ".*" },
+    { "user": "lightpix", "vhost": "psp-a", "configure": ".*", "write": ".*", "read": ".*" },
+    { "user": "lightpix", "vhost": "psp-b", "configure": ".*", "write": ".*", "read": ".*" }
+  ]
+}

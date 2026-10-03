@@ -1,0 +1,22 @@
+# Cluster kind do laboratório: um nó, com as portas dos serviços publicadas no
+# host nas mesmas portas do Compose (a stack do Compose precisa estar parada).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: lightpix
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # payment-api e resolver de cada PSP
+      - { containerPort: 30081, hostPort: 8081 }
+      - { containerPort: 30082, hostPort: 8082 }
+      - { containerPort: 30083, hostPort: 8083 }
+      - { containerPort: 30084, hostPort: 8084 }
+      # simuladores: spi, dict, bacen
+      - { containerPort: 30091, hostPort: 8091 }
+      - { containerPort: 30092, hostPort: 8092 }
+      - { containerPort: 30093, hostPort: 8093 }
+      # RabbitMQ (gestão), Grafana, Prometheus, Alertmanager
+      - { containerPort: 30672, hostPort: 15672 }
+      - { containerPort: 30300, hostPort: 3000 }
+      - { containerPort: 30900, hostPort: 9090 }
+      - { containerPort: 30903, hostPort: 9093 }

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: light-pix
+description: PSP Pix de laboratório (api, relay, connector, worker e resolver por PSP), simuladores de DICT, SPI e Bacen, MongoDB, RabbitMQ e a coleta OpenTelemetry. Instale depois do kube-prometheus-stack.
+type: application
+version: 0.1.0
+appVersion: dev

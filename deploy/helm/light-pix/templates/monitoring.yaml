@@ -1,0 +1,48 @@
+{{- /*
+  Regras e dashboards do laboratório no kube-prometheus-stack.
+  - As regras (alertas de causa e SLOs do Sloth) viram PrometheusRules. As que
+    dependem de rótulos do Docker Compose (cAdvisor) ficam de fora: no cluster,
+    reinícios e OOM vêm das regras padrão do kube-state-metrics.
+  - Os dashboards viram ConfigMaps que o sidecar do Grafana carrega.
+  Os arquivos em files/ são cópias geradas por `make k8s-sync`.
+*/ -}}
+{{- if .Values.monitoring.enabled }}
+{{- range $path, $_ := .Files.Glob "files/rules/*.yml" }}
+{{- $doc := $.Files.Get $path | fromYaml }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: lp-{{ base $path | trimSuffix ".yml" }}
+  labels:
+    {{- include "lp.labels" $ | nindent 4 }}
+spec:
+  groups:
+    {{- range $g := $doc.groups }}
+    {{- $rules := list }}
+    {{- range $r := $g.rules }}
+    {{- if not (contains "container_label_com_docker_compose" (default "" $r.expr)) }}
+    {{- $rules = append $rules $r }}
+    {{- end }}
+    {{- end }}
+    {{- if $rules }}
+    - name: {{ $g.name }}
+      rules:
+        {{- toYaml $rules | nindent 8 }}
+    {{- end }}
+    {{- end }}
+{{- end }}
+{{- range $path, $_ := .Files.Glob "files/dashboards/*.json" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lp-dashboard-{{ base $path | trimSuffix ".json" }}
+  labels:
+    {{- include "lp.labels" $ | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  {{ base $path }}: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}

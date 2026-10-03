@@ -1,0 +1,20 @@
+groups:
+  - name: infra
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alvo {{ $labels.job }} ({{ $labels.instance }}) fora do ar"
+          runbook: docs/runbooks/target-down.md
+
+      # Pegaria o mini-case: pods do SPI connector reiniciando por memória.
+      - alert: ContainerOOMKilled
+        expr: increase(container_oom_events_total{container_label_com_docker_compose_project="light-pix"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.container_label_com_docker_compose_service }} morto por falta de memória"
+          runbook: docs/runbooks/container-oomkilled.md

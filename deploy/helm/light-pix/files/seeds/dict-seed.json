@@ -1,0 +1,258 @@
+[
+  {
+    "Key": "12345678909",
+    "KeyType": "CPF",
+    "Account": {
+      "Participant": "11111111",
+      "Branch": "0001",
+      "AccountNumber": "1000001",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "12345678909",
+      "Name": "Alice Andrade"
+    }
+  },
+  {
+    "Key": "alice@example.com",
+    "KeyType": "EMAIL",
+    "Account": {
+      "Participant": "11111111",
+      "Branch": "0001",
+      "AccountNumber": "1000001",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "12345678909",
+      "Name": "Alice Andrade"
+    }
+  },
+  {
+    "Key": "+5511990000001",
+    "KeyType": "PHONE",
+    "Account": {
+      "Participant": "11111111",
+      "Branch": "0001",
+      "AccountNumber": "1000001",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "12345678909",
+      "Name": "Alice Andrade"
+    }
+  },
+  {
+    "Key": "f211fa2e-0c21-4ec5-91ae-5f03d05c3be9",
+    "KeyType": "EVP",
+    "Account": {
+      "Participant": "11111111",
+      "Branch": "0001",
+      "AccountNumber": "1000001",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "12345678909",
+      "Name": "Alice Andrade"
+    }
+  },
+  {
+    "Key": "98765432100",
+    "KeyType": "CPF",
+    "Account": {
+      "Participant": "11111111",
+      "Branch": "0001",
+      "AccountNumber": "1000002",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "98765432100",
+      "Name": "Carol Costa"
+    }
+  },
+  {
+    "Key": "carol@example.com",
+    "KeyType": "EMAIL",
+    "Account": {
+      "Participant": "11111111",
+      "Branch": "0001",
+      "AccountNumber": "1000002",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "98765432100",
+      "Name": "Carol Costa"
+    }
+  },
+  {
+    "Key": "+5511990000002",
+    "KeyType": "PHONE",
+    "Account": {
+      "Participant": "11111111",
+      "Branch": "0001",
+      "AccountNumber": "1000002",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "98765432100",
+      "Name": "Carol Costa"
+    }
+  },
+  {
+    "Key": "96da346b-edd8-45e3-b0c9-e24d8926812f",
+    "KeyType": "EVP",
+    "Account": {
+      "Participant": "11111111",
+      "Branch": "0001",
+      "AccountNumber": "1000002",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "98765432100",
+      "Name": "Carol Costa"
+    }
+  },
+  {
+    "Key": "11144477735",
+    "KeyType": "CPF",
+    "Account": {
+      "Participant": "22222222",
+      "Branch": "0001",
+      "AccountNumber": "2000001",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "11144477735",
+      "Name": "Bob Barros"
+    }
+  },
+  {
+    "Key": "bob@example.com",
+    "KeyType": "EMAIL",
+    "Account": {
+      "Participant": "22222222",
+      "Branch": "0001",
+      "AccountNumber": "2000001",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "11144477735",
+      "Name": "Bob Barros"
+    }
+  },
+  {
+    "Key": "+5521990000001",
+    "KeyType": "PHONE",
+    "Account": {
+      "Participant": "22222222",
+      "Branch": "0001",
+      "AccountNumber": "2000001",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "11144477735",
+      "Name": "Bob Barros"
+    }
+  },
+  {
+    "Key": "78072ea9-1e68-4841-8856-825297e554b4",
+    "KeyType": "EVP",
+    "Account": {
+      "Participant": "22222222",
+      "Branch": "0001",
+      "AccountNumber": "2000001",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "11144477735",
+      "Name": "Bob Barros"
+    }
+  },
+  {
+    "Key": "39053344705",
+    "KeyType": "CPF",
+    "Account": {
+      "Participant": "22222222",
+      "Branch": "0001",
+      "AccountNumber": "2000002",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "39053344705",
+      "Name": "Dave Duarte"
+    }
+  },
+  {
+    "Key": "dave@example.com",
+    "KeyType": "EMAIL",
+    "Account": {
+      "Participant": "22222222",
+      "Branch": "0001",
+      "AccountNumber": "2000002",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "39053344705",
+      "Name": "Dave Duarte"
+    }
+  },
+  {
+    "Key": "+5521990000002",
+    "KeyType": "PHONE",
+    "Account": {
+      "Participant": "22222222",
+      "Branch": "0001",
+      "AccountNumber": "2000002",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "39053344705",
+      "Name": "Dave Duarte"
+    }
+  },
+  {
+    "Key": "6b74b8de-9f39-46bf-9b1a-8bcf44f29495",
+    "KeyType": "EVP",
+    "Account": {
+      "Participant": "22222222",
+      "Branch": "0001",
+      "AccountNumber": "2000002",
+      "AccountType": "CACC",
+      "OpeningDate": "2024-01-15T00:00:00Z"
+    },
+    "Owner": {
+      "Type": "NATURAL_PERSON",
+      "TaxIdNumber": "39053344705",
+      "Name": "Dave Duarte"
+    }
+  }
+]

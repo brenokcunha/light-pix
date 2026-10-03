@@ -1,0 +1,84 @@
+{{- /* Simuladores do BCB: spi-sim, dict-sim e bacen-sim, um Deployment cada. */ -}}
+{{- range $name, $sim := .Values.sims }}
+{{- $full := printf "%s-sim" $name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}
+  labels:
+    {{- include "lp.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: {{ $full }}
+    lightpix/role: simulator
+spec:
+  replicas: 1 # o spi-sim tem varredura própria; mais de uma réplica disputaria o trabalho
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $full }}
+  template:
+    metadata:
+      labels:
+        {{- include "lp.labels" $ | nindent 8 }}
+        app.kubernetes.io/name: {{ $full }}
+        lightpix/role: simulator
+    spec:
+      terminationGracePeriodSeconds: 30
+      initContainers:
+        {{- include "lp.waitMongo" $ | nindent 8 }}
+      containers:
+        - name: app
+          image: {{ index $.Values.images $sim.image }}
+          imagePullPolicy: {{ $.Values.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            {{- include "lp.otelEnv" $ | nindent 12 }}
+            - { name: OTEL_RESOURCE_ATTRIBUTES, value: "deployment.environment.name={{ $.Values.environment }}" }
+            - { name: MONGO_URI, value: "mongodb://mongo-0.mongo:27017/?replicaSet=rs0" }
+            - { name: MONGO_DB, value: {{ $sim.db | quote }} }
+            {{- range $k, $v := $sim.env }}
+            - { name: {{ $k }}, value: {{ $v | quote }} }
+            {{- end }}
+          securityContext:
+            {{- include "lp.securityContext" $ | nindent 12 }}
+          {{- include "lp.probes" $ | nindent 10 }}
+          resources:
+            {{- toYaml $.Values.simResources | nindent 12 }}
+          {{- if $sim.seeds }}
+          volumeMounts:
+            - { name: seeds, mountPath: /etc/seeds, readOnly: true }
+          {{- end }}
+      {{- if $sim.seeds }}
+      volumes:
+        - name: seeds
+          configMap: { name: seeds }
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}
+  labels:
+    {{- include "lp.labels" $ | nindent 4 }}
+    app.kubernetes.io/name: {{ $full }}
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: {{ $full }}
+  ports:
+    - { name: http, port: 8080, targetPort: http, nodePort: {{ $sim.nodePort }} }
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: seeds
+  labels:
+    {{- include "lp.labels" . | nindent 4 }}
+data:
+  accounts-seed.json: |-
+{{ .Files.Get "files/seeds/accounts-seed.json" | indent 4 }}
+  dict-seed.json: |-
+{{ .Files.Get "files/seeds/dict-seed.json" | indent 4 }}
