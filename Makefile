@@ -76,8 +76,9 @@ k8s-sync: ## copia dashboards, regras e configs para o chart Helm
 k8s-up: ## cria o cluster kind e instala metrics-server, kube-prometheus-stack e o chart light-pix
 	./scripts/k8s_up.sh
 
+k8s-down: export PATH := $(CURDIR)/.tools:$(PATH)
 k8s-down: ## apaga o cluster kind
-	PATH="$(CURDIR)/.tools:$$PATH" kind delete cluster --name lightpix
+	kind delete cluster --name lightpix
 
 k8s-status: ## pods, HPA e alertas do cluster
 	kubectl -n lightpix get pods,hpa

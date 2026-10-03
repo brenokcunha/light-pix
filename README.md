@@ -2,7 +2,8 @@
 
 Laboratório local de um PSP Pix (envio e recebimento) com simuladores de DICT,
 SPI e Bacen e observabilidade open source. Arquitetura e fases em
-[docs/arquitetura.md](docs/arquitetura.md).
+[docs/arquitetura.md](docs/arquitetura.md); o mapa dos módulos (pacotes Go e
+componentes em execução) está em [docs/modulos.md](docs/modulos.md).
 
 ## Pré-requisitos
 
