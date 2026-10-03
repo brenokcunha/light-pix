@@ -1,0 +1,9 @@
+# Sobreposição do cenário 1: o conector do PSP A vaza memória e tem limite.
+# memswap_limit igual a mem_limit desliga o swap: sem isso o Docker deixa o
+# contêiner passar de 96 MiB trocando para disco e ele nunca é morto.
+services:
+  psp-a-connector:
+    mem_limit: 96m
+    memswap_limit: 96m
+    environment:
+      LEAK_KB_PER_MESSAGE: "256"

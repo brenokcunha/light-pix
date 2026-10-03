@@ -1,0 +1,187 @@
+# Alertas de causa do Pix: o que está quebrado, não o impacto (o impacto vem
+# dos SLOs, em slo-*.yml). Os tempos de "for" são curtos para o laboratório;
+# em produção seriam maiores. Cada alerta aponta para o runbook em docs/runbooks.
+groups:
+  - name: pix-mensageria
+    rules:
+      - alert: OutboxBacklog
+        expr: max by (psp_ispb, psp_name) (outbox_pending) > 100
+        for: 1m
+        labels: { severity: warning, category: pix }
+        annotations:
+          summary: "Outbox do PSP {{ $labels.psp_name }} com {{ $value | humanize }} eventos sem publicar"
+          runbook: docs/runbooks/outbox-backlog.md
+
+      - alert: QueueBacklog
+        expr: max by (vhost, queue) (rabbitmq_queue_messages_ready{queue!~".*\\.(dlq|retry\\..*)"}) > 200
+        for: 1m
+        labels: { severity: warning, category: pix }
+        annotations:
+          summary: "Fila {{ $labels.queue }} ({{ $labels.vhost }}) com {{ $value | humanize }} mensagens prontas"
+          runbook: docs/runbooks/queue-backlog.md
+
+      - alert: QueueMessageAgeHigh
+        expr: |
+          histogram_quantile(0.99, sum by (le, queue, psp_ispb) (rate(broker_message_age_seconds_bucket[2m]))) > 10
+        for: 1m
+        labels: { severity: warning, category: pix }
+        annotations:
+          summary: "Mensagens da fila {{ $labels.queue }} esperam mais de 10s (P99) no PSP {{ $labels.psp_ispb }}"
+          runbook: docs/runbooks/queue-backlog.md
+
+      - alert: MessageRetryRateHigh
+        expr: sum by (queue, psp_ispb) (rate(broker_messages_processed_total{result="retry"}[2m])) > 0.3
+        for: 1m
+        labels: { severity: warning, category: pix }
+        annotations:
+          summary: "Fila {{ $labels.queue }} do PSP {{ $labels.psp_ispb }} reenviando {{ $value | humanize }} mensagens/s: dependência instável"
+          runbook: docs/runbooks/dead-letter-queue.md
+
+      # O resolver devolve a DLQ à fila a cada minuto, então a DLQ raramente fica
+      # cheia por muito tempo: o sinal de que mensagens esgotaram os retries é o
+      # evento (MessagesDeadLettered). A fila parada (abaixo) indica que o
+      # resolver não está dando conta de esvaziá-la.
+      - alert: MessagesDeadLettered
+        expr: sum by (queue, psp_ispb) (increase(broker_messages_processed_total{result="dead_letter"}[5m])) > 0
+        keep_firing_for: 2m
+        labels: { severity: warning, category: pix }
+        annotations:
+          summary: "{{ $value | humanize }} mensagens da fila {{ $labels.queue }} do PSP {{ $labels.psp_ispb }} esgotaram os retries e foram para a DLQ"
+          runbook: docs/runbooks/dead-letter-queue.md
+
+      - alert: DeadLetterQueueNotEmpty
+        expr: max by (vhost, queue) (rabbitmq_queue_messages{queue=~".*\\.dlq"}) > 0
+        for: 3m
+        labels: { severity: warning, category: pix }
+        annotations:
+          summary: "DLQ {{ $labels.queue }} ({{ $labels.vhost }}) com {{ $value | humanize }} mensagens há mais de 3 min: o resolver não a esvazia"
+          runbook: docs/runbooks/dead-letter-queue.md
+
+      - alert: DeadLettersParked
+        expr: sum by (psp_ispb, queue) (increase(resolver_dlq_parked_total[15m])) > 0
+        labels: { severity: critical, category: pix }
+        annotations:
+          summary: "Mensagens estacionadas em dead_letters no PSP {{ $labels.psp_ispb }} (fila {{ $labels.queue }}): precisam de análise manual"
+          runbook: docs/runbooks/dead-letter-queue.md
+
+  - name: pix-pagamentos
+    rules:
+      - alert: PaymentsStuck
+        expr: sum by (psp_ispb, direction, state) (pix_payments_stuck) > 0
+        for: 1m
+        labels: { severity: warning, category: pix }
+        annotations:
+          summary: "{{ $value | humanize }} Pix {{ $labels.direction }} em {{ $labels.state }} há mais que o limiar no PSP {{ $labels.psp_ispb }}"
+          runbook: docs/runbooks/stuck-payments.md
+
+      - alert: PaymentsStuckMany
+        expr: sum by (psp_ispb) (pix_payments_stuck) > 50
+        for: 2m
+        labels: { severity: critical, category: pix }
+        annotations:
+          summary: "Mais de 50 Pix parados no PSP {{ $labels.psp_ispb }}: o resolver não está dando conta"
+          runbook: docs/runbooks/stuck-payments.md
+
+      - alert: DictCircuitBreakerOpen
+        expr: max by (psp_ispb) (resilience_breaker_state{breaker="dict"}) == 2
+        for: 30s
+        labels: { severity: critical, category: pix }
+        annotations:
+          summary: "Circuit breaker do DICT aberto no PSP {{ $labels.psp_ispb }}: Pix por chave falham rápido"
+          runbook: docs/runbooks/dict-breaker.md
+
+      - alert: ReconciliationDivergence
+        expr: max by (psp_ispb) (reconciliation_last_divergences) > 0
+        labels: { severity: critical, category: pix }
+        annotations:
+          summary: "A última reconciliação do PSP {{ $labels.psp_ispb }} achou {{ $value | humanize }} divergências com a conta PI"
+          runbook: docs/runbooks/reconciliation-divergence.md
+
+      - alert: ReconciliationStale
+        expr: time() - max by (psp_ispb) (reconciliation_last_timestamp_seconds) > 26 * 3600
+        for: 5m
+        labels: { severity: warning, category: pix }
+        annotations:
+          summary: "O PSP {{ $labels.psp_ispb }} não concilia a conta PI há mais de 26h"
+          runbook: docs/runbooks/reconciliation-divergence.md
+
+  - name: pix-liquidez
+    rules:
+      - alert: PILiquidityLow
+        expr: min by (ispb) (bacen_sim_pi_account_balance) < 10000
+        for: 30s
+        labels: { severity: critical, category: pix }
+        annotations:
+          summary: "Conta PI do participante {{ $labels.ispb }} com R$ {{ $value | humanize }}: risco de rejeição AM04"
+          runbook: docs/runbooks/pi-liquidity.md
+
+      - alert: PixRejectedForLiquidity
+        expr: sum by (psp_ispb) (increase(pix_payments_finished_total{state="REJECTED", reason="AM04"}[2m])) > 0
+        labels: { severity: critical, category: pix }
+        annotations:
+          summary: "Pix do PSP {{ $labels.psp_ispb }} rejeitados por saldo insuficiente na conta PI (AM04)"
+          runbook: docs/runbooks/pi-liquidity.md
+
+  - name: pix-containers
+    rules:
+      # Reinício visto pelo próprio processo: o contador de alocações do Go volta a
+      # zero. Vale para qualquer serviço Go e independe do cAdvisor (que, no
+      # Docker Desktop, não guarda reinícios nem OOMs de contêiner reiniciado).
+      - alert: ContainerRestarting
+        expr: sum by (job, psp_name) (resets(go_memory_allocations_total[10m])) > 1
+        keep_firing_for: 2m
+        labels: { severity: warning, category: pix }
+        annotations:
+          summary: "Serviço {{ $labels.job }} {{ $labels.psp_name }} reiniciou {{ $value }} vezes em 10 min"
+          runbook: docs/runbooks/container-oomkilled.md
+
+      # OOMKilled de verdade (evento do kernel, via cAdvisor). Em kernels que não
+      # expõem o evento, o alerta abaixo cobre o mesmo incidente por inferência.
+      - alert: ContainerRestartedNearMemoryLimit
+        expr: |
+          max by (container_label_com_docker_compose_service) (
+            max_over_time((
+              container_memory_working_set_bytes{container_label_com_docker_compose_project="light-pix", container_label_com_docker_compose_service!=""}
+              / (container_spec_memory_limit_bytes{container_label_com_docker_compose_project="light-pix", container_label_com_docker_compose_service!=""} > 0)
+            )[5m:15s])
+          ) > 0.75
+          and
+          max by (container_label_com_docker_compose_service) (
+            container_memory_working_set_bytes{container_label_com_docker_compose_project="light-pix", container_label_com_docker_compose_service!=""}
+            / (container_spec_memory_limit_bytes{container_label_com_docker_compose_project="light-pix", container_label_com_docker_compose_service!=""} > 0)
+          ) < 0.6
+        keep_firing_for: 3m
+        labels: { severity: critical, category: pix }
+        annotations:
+          summary: "{{ $labels.container_label_com_docker_compose_service }} chegou perto do limite de memória e depois caiu: provável OOMKilled"
+          runbook: docs/runbooks/container-oomkilled.md
+
+      - alert: ContainerMemoryNearLimit
+        expr: |
+          max by (container_label_com_docker_compose_service) (
+            container_memory_working_set_bytes{container_label_com_docker_compose_project="light-pix", container_label_com_docker_compose_service!=""}
+            / (container_spec_memory_limit_bytes{container_label_com_docker_compose_project="light-pix", container_label_com_docker_compose_service!=""} > 0)
+          ) > 0.85
+        for: 30s
+        labels: { severity: warning, category: pix }
+        annotations:
+          summary: "Container {{ $labels.container_label_com_docker_compose_service }} usando {{ $value | humanizePercentage }} do limite de memória"
+          runbook: docs/runbooks/container-oomkilled.md
+
+  - name: pix-laboratorio
+    rules:
+      # Não é falha do sistema: avisa que há falhas injetadas ativas (e dá o
+      # contexto para ler os demais alertas durante um cenário).
+      - alert: FaultInjectionActive
+        expr: sum by (kind) (increase(faults_injected_total[1m])) > 0
+        labels: { severity: info, category: laboratorio }
+        annotations:
+          summary: "Falhas injetadas ({{ $labels.kind }}) nos simuladores no último minuto"
+          runbook: docs/runbooks/README.md
+
+      - alert: IGAReportsDropped
+        expr: sum(increase(spi_sim_iga_dropped_total[5m])) > 0
+        labels: { severity: info, category: laboratorio }
+        annotations:
+          summary: "O spi-sim descartou registros do IGA (bacen-sim indisponível ou lento)"
+          runbook: docs/runbooks/README.md

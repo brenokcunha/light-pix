@@ -32,6 +32,8 @@ type Store struct {
 	deadLetters *mongo.Collection
 	// reports guarda os relatórios de reconciliação.
 	reports *mongo.Collection
+	// igaCursor guarda até onde os Pix encerrados foram reportados ao IGA.
+	igaCursor *mongo.Collection
 }
 
 // NewStore prepara as coleções e cria os índices.
@@ -46,6 +48,7 @@ func NewStore(ctx context.Context, client *mongo.Client, db *mongo.Database) (*S
 
 		deadLetters: db.Collection("dead_letters"),
 		reports:     db.Collection("reconciliation_reports"),
+		igaCursor:   db.Collection("iga_cursor"),
 	}
 	idx := []struct {
 		coll   *mongo.Collection

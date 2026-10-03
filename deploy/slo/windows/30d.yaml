@@ -1,0 +1,30 @@
+# Janelas de alerta por burn rate para o laboratório. Mantêm as taxas de queima
+# do padrão do Sloth (14,4x e 6x para página; 3x e 1x para ticket), mas com
+# janelas curtas, para uma carga de poucos minutos disparar o alerta. Em
+# produção usam-se 5m/1h, 30m/6h, 2h/1d e 6h/3d.
+#
+# errorBudgetPercent = burn × longWindow / sloPeriod (em %):
+#   14,4 × 5m / 30d = 0,1667    6 × 15m / 30d = 0,2083
+#   3 × 1h / 30d = 0,4167       1 × 3h / 30d = 0,4167
+apiVersion: sloth.slok.dev/v1
+kind: AlertWindows
+spec:
+  sloPeriod: 30d
+  page:
+    quick:
+      errorBudgetPercent: 0.1667
+      shortWindow: 1m
+      longWindow: 5m
+    slow:
+      errorBudgetPercent: 0.2083
+      shortWindow: 3m
+      longWindow: 15m
+  ticket:
+    quick:
+      errorBudgetPercent: 0.4167
+      shortWindow: 10m
+      longWindow: 1h
+    slow:
+      errorBudgetPercent: 0.4167
+      shortWindow: 30m
+      longWindow: 3h

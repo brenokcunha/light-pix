@@ -147,6 +147,7 @@ func newWorld(t *testing.T, opts worldOpts) *world {
 	must(t, err)
 	s, err := spi.New(ctx, sClient, sDB, spi.Config{
 		Faults:       w.faults,
+		IGA:          w.bacen,
 		Participants: []string{ispbA, ispbB}, CreditorTimeout: opts.creditorTimeout, PollWait: 2 * time.Second,
 		Lease: 2 * time.Second, SweepInterval: 100 * time.Millisecond, SettleRetry: 500 * time.Millisecond, Settler: w.bacen,
 	})
@@ -225,6 +226,7 @@ func (w *world) newNode(parent context.Context, ispb string, skip map[string]boo
 		MaxRedrives: 3, ReconcileAt: w.opts.reconcileAt,
 	})
 	must(t, err)
+	n.resolver.SetIGA(w.bacen)
 	for role, start := range map[string]func(){"relay": n.startRelay, "connector": n.startConnector, "worker": n.startWorker} {
 		if !skip[role] {
 			start()

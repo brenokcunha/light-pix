@@ -1,4 +1,4 @@
-.PHONY: up down reset ps logs build test test-integration vet fmt load faults
+.PHONY: up down reset ps logs build test test-integration vet fmt load faults slo dashboards runbooks scenarios
 
 up: ## sobe a stack completa (rebuild das imagens Go)
 	docker compose up -d --build
@@ -39,7 +39,7 @@ fmt:
 #   make load RATE=20 DURATION=2m
 #   make load FAULTS_SPI='{"errorRate":0.3}' FAULTS_DICT='{"latency":{"mode":"fixed","ms":300}}'
 load: ## carga sustentada de Pix, com falhas opcionais nos simuladores
-	docker compose --profile load run --rm -e RATE -e DURATION -e FAULTS_SPI -e FAULTS_DICT -e FAULTS_BACEN k6
+	docker compose --profile load run --rm -e RATE -e DURATION -e DIRECTION -e FAULTS_SPI -e FAULTS_DICT -e FAULTS_BACEN k6
 
 # Falhas dos simuladores: make faults                 (mostra as atuais)
 #                         make faults s=spi j='{"dropPacs002":0.5}'
@@ -47,3 +47,21 @@ load: ## carga sustentada de Pix, com falhas opcionais nos simuladores
 s ?= spi
 faults: ## mostra, define ou limpa as falhas de um simulador (s=spi|dict|bacen)
 	@./scripts/faults.sh $(s) '$(j)'
+
+# Artefatos gerados (os JSON/YAML/Markdown gerados ficam versionados).
+SLOTH_IMAGE ?= ghcr.io/slok/sloth@sha256:ad651f2de49307f5e5f971be82927ef99ac27bd67df6aa6aff713957ede5593f
+WORKDIR := $(shell pwd -W 2>/dev/null || pwd)
+
+slo: ## gera as especificações de SLO e as regras do Prometheus (Sloth, via container)
+	python scripts/gen_slo.py
+	MSYS_NO_PATHCONV=1 docker run --rm -v "$(WORKDIR):/work" $(SLOTH_IMAGE) generate -i /work/deploy/slo/specs -o /work/deploy/observability/prometheus/rules --slo-period-windows-path /work/deploy/slo/windows
+
+dashboards: ## gera os dashboards do Grafana
+	python scripts/gen_dashboards.py
+
+runbooks: ## gera docs/runbooks
+	python scripts/gen_runbooks.py
+
+# Cenários de incidente (cada um leva alguns minutos): make scenarios n="2 4"
+scenarios: ## reproduz os incidentes e confere os alertas (n="1 2" escolhe)
+	./scenarios/run.sh $(n)

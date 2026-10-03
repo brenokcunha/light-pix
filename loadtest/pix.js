@@ -5,6 +5,7 @@
 // Parâmetros (variáveis de ambiente):
 //   RATE        Pix por segundo, somando os dois sentidos (padrão 10)
 //   DURATION    duração da carga (padrão 60s)
+//   DIRECTION   both (padrão), a_to_b ou b_to_a
 //   FAULTS_SPI, FAULTS_DICT, FAULTS_BACEN
 //               JSON de falhas (ver docs: /admin/faults) aplicado no início e
 //               desligado no fim, ex.: '{"errorRate":0.3}'
@@ -39,11 +40,19 @@ const B = {
 const rate = Number(__ENV.RATE || 10);
 const duration = __ENV.DURATION || '60s';
 
+// DIRECTION: both (padrão), a_to_b ou b_to_a. Um sentido só esvazia a conta PI
+// de quem paga (cenário de liquidez).
+const direction = __ENV.DIRECTION || 'both';
+const scenarios = {};
+if (direction !== 'b_to_a') {
+  scenarios.a_para_b = scenario('a_para_b', direction === 'both' ? rate / 2 : rate, 'A', 'B');
+}
+if (direction !== 'a_to_b') {
+  scenarios.b_para_a = scenario('b_para_a', direction === 'both' ? rate / 2 : rate, 'B', 'A');
+}
+
 export const options = {
-  scenarios: {
-    a_para_b: scenario('a_para_b', rate / 2, 'A', 'B'),
-    b_para_a: scenario('b_para_a', rate / 2, 'B', 'A'),
-  },
+  scenarios,
   thresholds: {
     // Iniciação (IGA): 95% dos pedidos aceitos em até 1,5s.
     'http_req_duration{name:create}': ['p(95)<1500'],

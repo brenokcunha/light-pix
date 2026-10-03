@@ -86,6 +86,34 @@ cerca de 20 Pix/s; acima de ~25 Pix/s a fila cresce, o p99 passa de 10s e o
 MongoDB (um nó, transações em todo passo) é o recurso saturado. Depois de uma
 carga alta, espere os pagamentos pendentes terminarem antes da próxima rodada.
 
+## Dashboards, SLOs, alertas e runbooks
+
+- **Grafana** (`localhost:3000`): *Pix — visão IGA* (experiência do pagador, iniciação,
+  liquidação, PSP × regulador, orçamento de erro, Pix lentos) e *Pix — serviços*.
+  Os dashboards são gerados por `make dashboards`; se os arquivos mudarem com o
+  Grafana no ar, `docker compose restart grafana` os recarrega.
+- **SLOs e alertas**: cinco SLOs por PSP (Sloth, `make slo`) com alerta de página e
+  de ticket por burn rate, mais os alertas de causa em
+  `deploy/observability/prometheus/rules/pix.yml`. Veja o que está disparando em
+  `localhost:9090/alerts` (ou no Alertmanager, `localhost:9093`).
+- **Runbooks**: um por alerta, em [docs/runbooks](docs/runbooks/README.md); a anotação
+  `runbook` do alerta aponta para ele.
+- **IGA**: `curl localhost:8093/api/v1/iga/11111111?window=1h` mostra a visão do
+  regulador (P50/P95/P99 e metas) sobre o PSP.
+
+## Cenários de incidente
+
+Cinco incidentes reproduzíveis (vazamento de memória, SPI intermitente, `pacs.002`
+perdidas, DICT lento, conta PI sem saldo): cada um aplica carga e falha, confere que
+os alertas certos disparam e que o sistema se recupera sozinho.
+
+```bash
+make scenarios            # os cinco (alguns minutos cada)
+make scenarios n="2 4"    # só alguns
+```
+
+Detalhes e alertas esperados em [scenarios/README.md](scenarios/README.md).
+
 ## Resolver e reconciliação
 
 O resolver de cada PSP resolve pagamentos parados consultando o SPI, devolve
@@ -135,4 +163,7 @@ curl http://localhost:8081/readyz
 | `make reset` | para e apaga os volumes |
 | `make logs s=psp-a-api` | segue os logs de um serviço |
 | `make test` / `make vet` | testes / análise estática |
-| `make test-integration` | testes com o MongoDB da stack (`make up` antes) |
+| `make load` / `make faults` | carga com k6 / falhas dos simuladores |
+| `make scenarios` | os cenários de incidente |
+| `make slo` / `make dashboards` / `make runbooks` | regenera as regras de SLO, os dashboards e os runbooks |
+| `make test-integration` | testes com o MongoDB e o RabbitMQ da stack (`make up` antes) |

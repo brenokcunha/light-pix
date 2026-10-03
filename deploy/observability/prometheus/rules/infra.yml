@@ -8,6 +8,7 @@ groups:
           severity: warning
         annotations:
           summary: "Alvo {{ $labels.job }} ({{ $labels.instance }}) fora do ar"
+          runbook: docs/runbooks/target-down.md
 
       # Pegaria o mini-case: pods do SPI connector reiniciando por memória.
       - alert: ContainerOOMKilled
@@ -16,3 +17,4 @@ groups:
           severity: critical
         annotations:
           summary: "Container {{ $labels.container_label_com_docker_compose_service }} morto por falta de memória"
+          runbook: docs/runbooks/container-oomkilled.md

@@ -40,6 +40,7 @@ type ResolverConfig struct {
 	DLQInterval time.Duration // período do reprocessamento das DLQs (1min)
 	MaxRedrives int           // vezes que uma mensagem sai da DLQ antes de ser estacionada (3)
 	ReconcileAt string        // "HH:MM" UTC da reconciliação diária; vazio desliga
+	IGAInterval time.Duration // período do envio dos instantes ao regulador (10s)
 }
 
 func (c *ResolverConfig) defaults() {
@@ -57,6 +58,9 @@ func (c *ResolverConfig) defaults() {
 	}
 	if c.MaxRedrives == 0 {
 		c.MaxRedrives = 3
+	}
+	if c.IGAInterval == 0 {
+		c.IGAInterval = 10 * time.Second
 	}
 }
 
@@ -78,6 +82,9 @@ type Resolver struct {
 	recRuns    metric.Int64Counter
 	recDiverge metric.Int64Counter
 	lastReport atomic.Pointer[Report]
+
+	igaSink     IGASink
+	igaReported metric.Int64Counter
 }
 
 // NewResolver prepara o resolver e registra as métricas.
@@ -105,6 +112,10 @@ func NewResolver(svc *Service, spi SPIStatus, pi PIStatement, conn *amqp.Connect
 	}
 	if r.recDiverge, err = meter.Int64Counter("reconciliation.divergences",
 		metric.WithDescription("Divergências achadas pela reconciliação, por tipo")); err != nil {
+		return nil, err
+	}
+	if r.igaReported, err = meter.Int64Counter("resolver.iga.reported",
+		metric.WithDescription("Registros enviados ao regulador (IGA)")); err != nil {
 		return nil, err
 	}
 	_, err = meter.Int64ObservableGauge("pix.payments.stuck",
@@ -200,6 +211,9 @@ func (r *Resolver) Run(ctx context.Context) error {
 	loop(r.cfg.Interval, func(ctx context.Context) error { _, err := r.ResolvePending(ctx); return err }, "pendências")
 	if r.conn != nil {
 		loop(r.cfg.DLQInterval, r.RedriveDLQs, "dlq")
+	}
+	if r.igaSink != nil {
+		loop(r.cfg.IGAInterval, func(ctx context.Context) error { _, err := r.ReportIGA(ctx); return err }, "iga")
 	}
 	if r.cfg.ReconcileAt != "" {
 		loop(r.cfg.Interval, r.reconcileIfDue, "reconciliação")

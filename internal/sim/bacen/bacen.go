@@ -94,6 +94,8 @@ type Server struct {
 	accounts    *mongo.Collection
 	entries     *mongo.Collection
 	settlements metric.Int64Counter
+	iga         *mongo.Collection
+	igaM        igaMetrics
 }
 
 // New prepara as coleções e as métricas.
@@ -111,6 +113,9 @@ func New(ctx context.Context, client *mongo.Client, dbName string) (*Server, err
 		return nil, fmt.Errorf("bacen: índices: %w", err)
 	}
 
+	if err := s.initIGA(ctx, db); err != nil {
+		return nil, err
+	}
 	meter := otel.Meter("github.com/brenokcunha/light-pix/internal/sim/bacen")
 	if s.settlements, err = meter.Int64Counter("bacen_sim.settlements",
 		metric.WithDescription("Pedidos de liquidação por resultado")); err != nil {
@@ -153,6 +158,9 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/pi-accounts/{ispb}", s.handleAccount)
 	mux.HandleFunc("GET /api/v1/pi-accounts/{ispb}/statement", s.handleStatement)
 	mux.HandleFunc("POST /api/v1/pi-accounts/{ispb}/str-transfers", s.handleSTRTransfer)
+	mux.HandleFunc("POST /api/v1/iga/spi-records", s.handleIGASPI)
+	mux.HandleFunc("POST /api/v1/iga/reports", s.handleIGAReports)
+	mux.HandleFunc("GET /api/v1/iga/{ispb}", s.handleIGA)
 }
 
 func (s *Server) handleSettle(w http.ResponseWriter, r *http.Request) {

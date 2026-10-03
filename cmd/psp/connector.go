@@ -32,7 +32,15 @@ func runConnector(ctx context.Context) error {
 		if err != nil {
 			return nil, err
 		}
+		leakKB, err := config.Float("LEAK_KB_PER_MESSAGE", 0)
+		if err != nil {
+			return nil, err
+		}
 		conn := psp.NewConnector(r.ispb, r.svc, clients.NewSPI(spiURL, 5*time.Second), pub, pollWait)
+		conn.SetLeak(int(leakKB))
+		if leakKB > 0 {
+			slog.WarnContext(ctx, "vazamento de memória injetado ligado", "kb_per_message", leakKB)
+		}
 		slog.InfoContext(ctx, "spi-connector iniciando", "ispb", r.ispb, "version", version)
 
 		return func(ctx context.Context) error {

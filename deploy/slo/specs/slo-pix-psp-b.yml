@@ -1,0 +1,117 @@
+# Gerado por scripts/gen_slo.py; não edite à mão.
+version: "prometheus/v1"
+service: "pix-psp-b"
+labels:
+  psp_ispb: "22222222"
+  psp_name: "psp-b"
+slos:
+  - name: "payer-experience"
+    objective: 99.0
+    description: "99% dos Pix enviados chegam ao estado final em até 10s (experiência do pagador, do pedido ao resultado)"
+    sli:
+      events:
+        error_query: |
+          sum(rate(pix_payment_duration_seconds_count{psp_ispb="22222222"}[{{.window}}])) - sum(rate(pix_payment_duration_seconds_bucket{psp_ispb="22222222", le="10"}[{{.window}}]))
+        total_query: |
+          sum(rate(pix_payment_duration_seconds_count{psp_ispb="22222222"}[{{.window}}]))
+    alerting:
+      name: "PixPayerExperience"
+      labels:
+        category: "pix"
+      annotations:
+        summary: "Pix do PSP {{ $labels.psp_name }} acima de 10s além do orçamento de erro"
+        runbook: "docs/runbooks/slo-payer-experience.md"
+      page_alert:
+        labels:
+          severity: critical
+      ticket_alert:
+        labels:
+          severity: warning
+  - name: "initiation"
+    objective: 95.0
+    description: "95% dos pedidos de Pix aceitos pela API em até 1,5s (iniciação)"
+    sli:
+      events:
+        error_query: |
+          sum(rate(http_server_request_duration_seconds_count{job="light-pix/payment-api", psp_ispb="22222222", http_request_method="POST", http_route="/v1/pix/payments"}[{{.window}}])) - sum(rate(http_server_request_duration_seconds_bucket{job="light-pix/payment-api", psp_ispb="22222222", http_request_method="POST", http_route="/v1/pix/payments", le="1.5"}[{{.window}}]))
+        total_query: |
+          sum(rate(http_server_request_duration_seconds_count{job="light-pix/payment-api", psp_ispb="22222222", http_request_method="POST", http_route="/v1/pix/payments"}[{{.window}}]))
+    alerting:
+      name: "PixInitiationLatency"
+      labels:
+        category: "pix"
+      annotations:
+        summary: "Iniciação de Pix lenta no PSP {{ $labels.psp_name }}"
+        runbook: "docs/runbooks/slo-initiation.md"
+      page_alert:
+        labels:
+          severity: critical
+      ticket_alert:
+        labels:
+          severity: warning
+  - name: "api-availability"
+    objective: 99.5
+    description: "99,5% das requisições à payment-api sem erro 5xx"
+    sli:
+      events:
+        error_query: |
+          sum(rate(http_server_request_duration_seconds_count{job="light-pix/payment-api", psp_ispb="22222222", http_route!="/readyz", http_response_status_code=~"5.."}[{{.window}}]))
+        total_query: |
+          sum(rate(http_server_request_duration_seconds_count{job="light-pix/payment-api", psp_ispb="22222222", http_route!="/readyz"}[{{.window}}]))
+    alerting:
+      name: "PixApiAvailability"
+      labels:
+        category: "pix"
+      annotations:
+        summary: "payment-api do PSP {{ $labels.psp_name }} devolvendo erros 5xx"
+        runbook: "docs/runbooks/slo-availability.md"
+      page_alert:
+        labels:
+          severity: critical
+      ticket_alert:
+        labels:
+          severity: warning
+  - name: "success-rate"
+    objective: 99.0
+    description: "99% dos Pix enviados não são rejeitados por falha técnica (AB03 prazo, ED05 liquidação, AM04 liquidez do PSP)"
+    sli:
+      events:
+        error_query: |
+          sum(rate(pix_payments_finished_total{psp_ispb="22222222", state="REJECTED", reason=~"AB03|ED05|AM04"}[{{.window}}]))
+        total_query: |
+          sum(rate(pix_payments_finished_total{psp_ispb="22222222"}[{{.window}}]))
+    alerting:
+      name: "PixSuccessRate"
+      labels:
+        category: "pix"
+      annotations:
+        summary: "Pix do PSP {{ $labels.psp_name }} rejeitados por falha técnica"
+        runbook: "docs/runbooks/slo-success-rate.md"
+      page_alert:
+        labels:
+          severity: critical
+      ticket_alert:
+        labels:
+          severity: warning
+  - name: "settlement"
+    objective: 99.9
+    description: "99,9% das liquidações em até 40s da chegada da pacs.008 ao SPI (IGA, visão do regulador)"
+    sli:
+      events:
+        error_query: |
+          sum(rate(iga_settlement_duration_seconds_count{ispb="22222222"}[{{.window}}])) - sum(rate(iga_settlement_duration_seconds_bucket{ispb="22222222", le="40"}[{{.window}}]))
+        total_query: |
+          sum(rate(iga_settlement_duration_seconds_count{ispb="22222222"}[{{.window}}]))
+    alerting:
+      name: "PixSettlementDeadline"
+      labels:
+        category: "pix"
+      annotations:
+        summary: "Liquidação do PSP {{ $labels.psp_name }} acima de 40s no SPI"
+        runbook: "docs/runbooks/slo-settlement.md"
+      page_alert:
+        labels:
+          severity: critical
+      ticket_alert:
+        labels:
+          severity: warning

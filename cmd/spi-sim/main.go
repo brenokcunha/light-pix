@@ -33,9 +33,11 @@ func setup(ctx context.Context, client *mongo.Client, db string, mux *http.Serve
 	if err != nil {
 		return nil, err
 	}
+	bacenClient := clients.NewBacen(bacenURL, 5*time.Second)
 	cfg := spi.Config{
 		Participants: config.List("SPI_PARTICIPANTS", "11111111,22222222"),
-		Settler:      clients.NewBacen(bacenURL, 5*time.Second),
+		Settler:      bacenClient,
+		IGA:          bacenClient,
 		Faults:       fs,
 	}
 	for _, d := range []struct {

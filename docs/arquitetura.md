@@ -190,11 +190,23 @@ mesmas escritas condicionais do caminho normal, então várias réplicas convive
 - `GET /api/v1/pi-accounts/{ispb}/statement?from&to&limit&after`: extrato
   append-only paginado por cursor, usado na reconciliação diária. O saldo é
   sempre a soma do extrato (o saldo inicial entra como aporte `seed`).
-- (F6) IGA: recebe os timestamps por transação (o SPI envia os seus; cada PSP
-  envia periodicamente `t0'`, `t6a` e equivalentes do recebedor em
-  `POST /api/v1/iga/reports`), calcula os indicadores por janela
-  (`GET /api/v1/iga/{ispb}`) e os expõe como métricas. Permite comparar o SLO
-  interno do PSP com o que o regulador enxerga.
+- **IGA**: mede a experiência do Pix do ponto de vista do regulador, juntando
+  instantes de três fontes por `EndToEndId`:
+  - o SPI envia os seus ao encerrar cada transação (`POST /api/v1/iga/spi-records`,
+    em lotes de 1s, sem bloquear o fluxo): chegada da `pacs.008`, aceite do
+    recebedor, liquidação e resultado;
+  - cada PSP envia os seus (`POST /api/v1/iga/reports`, a cada 10s, pelo resolver,
+    com cursor persistido): o pagador manda `t0` (pedido aceito) e `t6a` (estado
+    final); o recebedor manda a chegada e o aceite.
+  - Os indicadores saem como histogramas, cada um medido uma única vez quando as duas
+    pontas existem, mesmo com relatórios repetidos ou fora de ordem:
+    `iga.payer_experience.duration` (t0 → t6a), `iga.initiation.duration` (t0 → chegada
+    ao SPI), `iga.settlement.duration` (chegada → liquidação, meta 40s),
+    `iga.creditor_response.duration` (chegada → ACSP) e o contador `iga.transactions`
+    por desfecho. `GET /api/v1/iga/{ispb}?window=1h` devolve P50/P95/P99, rejeições
+    por motivo e se cada meta (P50 ≤ 6s e P99 ≤ 10s do pagador; P50 ≤ 0,9s e P95 ≤ 1,5s
+    da iniciação; liquidação ≤ 40s) está sendo cumprida. Permite comparar o SLO
+    interno do PSP com o que o regulador enxerga.
 
 **Injeção de falhas** — os três simuladores expõem `GET`, `PUT` e `DELETE
 /admin/faults` (PUT substitui tudo; DELETE desliga; `FAULTS` no ambiente dá a
@@ -290,21 +302,40 @@ reprocessar um evento antigo nunca regride um pagamento.
   nunca vira label. Também: `rabbitmq_prometheus`, `mongodb_exporter`, cAdvisor.
 - **Logs:** `slog` JSON com `trace_id`/`span_id` e mascaramento de CPF e chave
   Pix; Alloy coleta do Docker e envia ao Loki.
-- **SLOs (Sloth):** experiência do pagador (P99 < 10s), iniciação (P95 < 1,5s),
-  disponibilidade da API, taxa de sucesso. Alertas multi-window burn rate, cada
-  um com link para runbook em `docs/runbooks/`.
-- **Alertas de causa:** idade/profundidade de fila, crescimento de DLQ, restarts
-  e `OOMKilled`, circuit breaker aberto, conexões ao Mongo.
-- **Grafana:** dashboard "Pix — visão IGA", dashboard por serviço, anotações de
-  deploy, correlação trace ↔ logs ↔ métricas (exemplars).
+- **SLOs (Sloth):** `scripts/gen_slo.py` gera uma especificação por PSP em
+  `deploy/slo/specs/` e `make slo` roda o Sloth (container) para escrever as regras em
+  `deploy/observability/prometheus/rules/slo-*.yml`. Cinco SLOs por PSP:
+  experiência do pagador (99% dos Pix em até 10s), iniciação (95% em até 1,5s),
+  disponibilidade da API (99,5% sem 5xx), taxa de sucesso (99% sem rejeição técnica:
+  `AB03`, `ED05`, `AM04`) e prazo de liquidação (99,9% em até 40s, visão do regulador).
+  Cada um tem alerta de página e de ticket por burn rate em múltiplas janelas; as
+  janelas do laboratório são curtas (`deploy/slo/windows/30d.yaml`, 1m/5m, 3m/15m,
+  10m/1h, 30m/3h), com as mesmas taxas de queima do padrão (14,4x, 6x, 3x e 1x).
+- **Alertas de causa** (`rules/pix.yml`, `rules/infra.yml`): idade e profundidade de
+  fila, outbox acumulando, retries, mensagens que foram à DLQ, DLQ que não esvazia,
+  mensagens estacionadas, Pix parados, circuit breaker do DICT aberto, divergência e
+  atraso da reconciliação, liquidez da conta PI, reinícios, memória perto do limite
+  e provável OOM. Cada alerta traz a anotação `runbook` com o caminho em
+  `docs/runbooks/` (um por alerta, gerados por `scripts/gen_runbooks.py`).
+- **Grafana** (dashboards gerados por `scripts/gen_dashboards.py`, provisionados):
+  - *Pix — visão IGA*: experiência do pagador, iniciação, liquidação e resposta do
+    recebedor, PSP × regulador, com as metas; desfechos por motivo; orçamento de erro
+    e burn rate dos SLOs; alertas disparando; e os Pix lentos (TraceQL no Tempo) para
+    abrir o trace.
+  - *Pix — serviços*: HTTP por serviço, contêineres e runtime Go, filas e idade das
+    mensagens, outbox, resolver, reconciliação, circuit breaker, simuladores, conta
+    PI, MongoDB e a carga do k6.
+  - Anotações de falhas injetadas e de reinícios de contêiner; correlação trace ↔ logs
+    ↔ métricas pelos datasources provisionados.
 
 ## 11. Cenários de falha (`scenarios/`)
 
-Scripts que combinam carga (k6) com injeção de falhas, cada um com o que
-observar e o runbook esperado:
+Cada cenário combina carga (k6) e falhas injetadas, **confere que os alertas esperados
+disparam** e que o sistema se recupera sozinho (filas e DLQs vazias, nenhum Pix parado,
+conta PI conciliada). `make scenarios` roda os cinco; ver `scenarios/README.md`.
 
-1. Mini-case: leak de memória no connector (flag) + `mem_limit` → `OOMKilled`,
-   fila `spi.out` crescendo.
+1. Mini-case: vazamento de memória no connector (`LEAK_KB_PER_MESSAGE`) + limite de
+   memória → `OOMKilled` em ciclo, fila `spi.out` oscilando.
 2. SPI intermitente (30% de 5xx) → retries, DLQ, reprocessamento.
 3. `pacs.002` perdidas → pendências resolvidas pelo resolver.
 4. DICT lento → circuit breaker abre, falha rápida.
@@ -330,11 +361,13 @@ internal/app       esqueleto comum dos binários de simulador
 compose.yaml       stack local (raiz do repositório)
 deploy/rabbitmq    vhosts, usuário e plugins
 deploy/sims        carga inicial do dict-sim
+deploy/psp         carga inicial das contas dos PSPs
 deploy/observability  otelcol, prometheus, alertmanager, tempo, loki, alloy, grafana
-deploy/slo         especificações Sloth e regras geradas
+deploy/slo         especificações Sloth (geradas) e janelas de alerta; as regras vão para deploy/observability/prometheus/rules
 loadtest           scripts k6
-scenarios          scripts de incidentes
-docs               arquitetura, ADRs, runbooks
+scenarios          cenários de incidente (script + alertas esperados)
+scripts            geradores (SLOs, dashboards, runbooks) e faults.sh
+docs               arquitetura e runbooks
 ```
 
 ## 13. Fases

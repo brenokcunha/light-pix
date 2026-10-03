@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -31,6 +32,30 @@ type Connector struct {
 	pub      *broker.Publisher
 	pollWait time.Duration
 	tracer   trace.Tracer
+
+	// Vazamento de memória injetado (cenário de incidente): a cada mensagem
+	// enviada, leakKB KiB ficam retidos para sempre.
+	leakKB int
+	leakMu sync.Mutex
+	leaked [][]byte
+}
+
+// SetLeak liga o vazamento de memória de mentira: kb KiB retidos por
+// mensagem enviada ao SPI. É a falha do cenário "leak no connector"; com um
+// limite de memória no container, termina em OOMKilled.
+func (c *Connector) SetLeak(kb int) { c.leakKB = kb }
+
+func (c *Connector) leak() {
+	if c.leakKB <= 0 {
+		return
+	}
+	b := make([]byte, c.leakKB*1024)
+	for i := range b { // escreve em todas as páginas para elas contarem na memória residente
+		b[i] = 1
+	}
+	c.leakMu.Lock()
+	c.leaked = append(c.leaked, b)
+	c.leakMu.Unlock()
 }
 
 // NewConnector cria o conector. pollWait é a espera de cada long-polling.
@@ -57,6 +82,7 @@ func (c *Connector) HandleOut(ctx context.Context, d amqp.Delivery) error {
 
 	err := c.spi.Send(ctx, c.ispb, env)
 	if err == nil {
+		c.leak()
 		if env.AppHdr.MsgDefIdr == iso20022.MsgPacs008 && env.FIToFICstmrCdtTrf != nil {
 			return c.svc.MarkSent(ctx, env.FIToFICstmrCdtTrf.CdtTrfTxInf.PmtId.EndToEndId)
 		}

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -43,6 +44,11 @@ type Settler interface {
 	Settle(ctx context.Context, req bacen.SettlementRequest) (bacen.SettlementResult, error)
 }
 
+// IGAReporter entrega os instantes medidos pelo SPI (o bacen-sim, no IGA).
+type IGAReporter interface {
+	ReportSPI(ctx context.Context, recs []bacen.IGASPIRecord) error
+}
+
 // Config parametriza o simulador.
 type Config struct {
 	Participants    []string      // ISPBs habilitados
@@ -52,6 +58,9 @@ type Config struct {
 	SweepInterval   time.Duration // varredura de prazos vencidos e liquidações pendentes
 	SettleRetry     time.Duration // idade mínima de uma liquidação parada para nova tentativa
 	Settler         Settler
+	// IGA, se definido, recebe os instantes de cada transação encerrada, em
+	// lotes e sem bloquear o fluxo: é um canal de medição, não de negócio.
+	IGA IGAReporter
 	// Faults, se definido, injeta falhas do SPI: pacs.002 perdidas e
 	// recebedor que não responde.
 	Faults *faults.State
@@ -87,10 +96,13 @@ type Server struct {
 	notifier *notifier
 	tracer   trace.Tracer
 	stopping chan struct{} // fechado quando Run termina: encerra os long-pollings
+	igaQueue chan bacen.IGASPIRecord
 
 	received  metric.Int64Counter
 	completed metric.Int64Counter
 	duration  metric.Float64Histogram
+	// igaDropped conta registros do IGA descartados (fila cheia ou envio falho).
+	igaDropped metric.Int64Counter
 }
 
 // New prepara coleções, índices e métricas.
@@ -103,6 +115,7 @@ func New(ctx context.Context, client *mongo.Client, dbName string, cfg Config) (
 		mailbox:  db.Collection("mailbox"),
 		notifier: newNotifier(),
 		stopping: make(chan struct{}),
+		igaQueue: make(chan bacen.IGASPIRecord, igaQueueSize),
 		tracer:   otel.Tracer("github.com/brenokcunha/light-pix/internal/sim/spi"),
 	}
 	if _, err := s.txs.Indexes().CreateMany(ctx, []mongo.IndexModel{
@@ -136,6 +149,10 @@ func (s *Server) initMetrics() error {
 	if s.duration, err = meter.Float64Histogram("spi_sim.transaction.duration",
 		metric.WithDescription("Da chegada da pacs.008 à liquidação ou rejeição"),
 		metric.WithUnit("s")); err != nil {
+		return err
+	}
+	if s.igaDropped, err = meter.Int64Counter("spi_sim.iga.dropped",
+		metric.WithDescription("Registros do IGA descartados (fila cheia ou envio ao bacen-sim falho)")); err != nil {
 		return err
 	}
 	_, err = meter.Int64ObservableGauge("spi_sim.mailbox.pending",
@@ -473,6 +490,7 @@ func (s *Server) finished(ctx context.Context, tx Transaction, status, reason st
 	if reason != "" {
 		slog.InfoContext(ctx, "transação rejeitada", "end_to_end_id", tx.EndToEndId, "reason", reason)
 	}
+	s.queueIGA(ctx, tx, status, reason, now)
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -507,9 +525,15 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, st)
 }
 
-// Run executa a varredura periódica até o contexto ser cancelado.
+// Run executa a varredura periódica e o envio dos instantes do IGA até o
+// contexto ser cancelado.
 func (s *Server) Run(ctx context.Context) error {
 	defer close(s.stopping)
+	if s.cfg.IGA != nil {
+		var wg sync.WaitGroup
+		wg.Go(func() { s.flushIGA(ctx) })
+		defer wg.Wait()
+	}
 	t := time.NewTicker(s.cfg.SweepInterval)
 	defer t.Stop()
 	for {

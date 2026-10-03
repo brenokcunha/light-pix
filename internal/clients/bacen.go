@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/brenokcunha/light-pix/internal/pix"
 	"github.com/brenokcunha/light-pix/internal/sim/bacen"
 )
 
@@ -57,4 +58,26 @@ func (b *Bacen) Statement(ctx context.Context, ispb string, from, to time.Time) 
 		}
 		after = page.Next
 	}
+}
+
+// ReportSPI envia ao bacen-sim os instantes que o SPI mediu de transações
+// encerradas (base do IGA).
+func (b *Bacen) ReportSPI(ctx context.Context, recs []bacen.IGASPIRecord) error {
+	_, err := b.c.do(ctx, http.MethodPost, "/api/v1/iga/spi-records", nil, map[string]any{"records": recs}, nil)
+	return err
+}
+
+// ReportPSP envia ao bacen-sim os instantes que o PSP ispb mediu de Pix
+// encerrados (base do IGA).
+func (b *Bacen) ReportPSP(ctx context.Context, ispb string, recs []bacen.IGAPSPRecord) error {
+	_, err := b.c.do(ctx, http.MethodPost, "/api/v1/iga/reports",
+		http.Header{pix.HeaderRequestingParticipant: {ispb}}, map[string]any{"records": recs}, nil)
+	return err
+}
+
+// IGA consulta a visão do regulador sobre o PSP na janela.
+func (b *Bacen) IGA(ctx context.Context, ispb string, window time.Duration) (bacen.IGAReport, error) {
+	var rep bacen.IGAReport
+	_, err := b.c.do(ctx, http.MethodGet, "/api/v1/iga/"+ispb+"?window="+url.QueryEscape(window.String()), nil, nil, &rep)
+	return rep, err
 }

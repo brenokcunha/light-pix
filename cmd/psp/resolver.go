@@ -43,10 +43,12 @@ func runResolver(ctx context.Context) error {
 		cfg.MaxRedrives = int(redrives)
 		cfg.ReconcileAt = config.String("RECONCILE_AT", "03:00")
 
-		res, err := psp.NewResolver(r.svc, clients.NewSPI(spiURL, 5*time.Second), clients.NewBacen(bacenURL, 15*time.Second), r.rabbit, cfg)
+		bacenClient := clients.NewBacen(bacenURL, 15*time.Second)
+		res, err := psp.NewResolver(r.svc, clients.NewSPI(spiURL, 5*time.Second), bacenClient, r.rabbit, cfg)
 		if err != nil {
 			return nil, err
 		}
+		res.SetIGA(bacenClient)
 		if err := res.LoadLastReport(ctx); err != nil {
 			return nil, err
 		}
