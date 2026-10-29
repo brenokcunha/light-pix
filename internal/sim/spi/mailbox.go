@@ -69,7 +69,7 @@ func (s *Server) handlePull(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if ack := q.Get("ack"); ack != "" {
 		if err := s.ack(ctx, ispb, ack); err != nil {
-			httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+			httpx.WriteInternal(w, r, err)
 			return
 		}
 	}
@@ -89,7 +89,7 @@ func (s *Server) handlePull(w http.ResponseWriter, r *http.Request) {
 		wake := s.notifier.wait(ispb)
 		batch, items, err := s.claim(ctx, ispb)
 		if err != nil {
-			httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+			httpx.WriteInternal(w, r, err)
 			return
 		}
 		if len(items) > 0 {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -196,5 +197,31 @@ func (d *Dict) AnalyzeInfraction(ctx context.Context, id string, a dict.Analysis
 func (d *Dict) CancelInfraction(ctx context.Context, id string) (dict.InfractionReport, error) {
 	var out dict.InfractionReport
 	_, err := d.c.do(ctx, http.MethodPost, "/api/v1/infraction-reports/"+url.PathEscape(id)+"/cancel", d.header(""), nil, &out)
+	return out, err
+}
+
+// EntryFilter filtra a listagem do diretório (conveniência do laboratório).
+type EntryFilter struct {
+	Query       string // trecho da chave ou do nome do titular
+	Participant string // ISPB do PSP da conta
+	Branch      string
+	Account     string
+	Limit       int
+}
+
+// ListEntries lista vínculos do diretório pela rota administrativa do dict-sim.
+// O DICT real não oferece isso; serve à interface de testes.
+func (d *Dict) ListEntries(ctx context.Context, f EntryFilter) ([]dict.Entry, error) {
+	q := url.Values{}
+	for k, v := range map[string]string{"q": f.Query, "participant": f.Participant, "branch": f.Branch, "account": f.Account} {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	if f.Limit > 0 {
+		q.Set("limit", strconv.Itoa(f.Limit))
+	}
+	var out []dict.Entry
+	_, err := d.c.do(ctx, http.MethodGet, "/admin/entries?"+q.Encode(), d.header(""), nil, &out)
 	return out, err
 }

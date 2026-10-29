@@ -276,7 +276,7 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, mongo.ErrNoDocuments):
 		httpx.WriteError(w, http.StatusNotFound, CodeUnknownAccount, errUnknownAccount.Error())
 	case err != nil:
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 	default:
 		httpx.WriteJSON(w, http.StatusOK, acc)
 	}
@@ -315,12 +315,12 @@ func (s *Server) handleStatement(w http.ResponseWriter, r *http.Request) {
 	cur, err := s.entries.Find(r.Context(), filter,
 		options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(int64(limit)+1))
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 		return
 	}
 	st := Statement{ISPB: r.PathValue("ispb"), Entries: []Entry{}}
 	if err := cur.All(r.Context(), &st.Entries); err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 		return
 	}
 	if len(st.Entries) > limit {
@@ -383,7 +383,7 @@ func (s *Server) handleSTRTransfer(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errConflict):
 		httpx.WriteError(w, http.StatusConflict, CodeConflict, err.Error())
 	case err != nil:
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 	case replay:
 		httpx.WriteJSON(w, http.StatusOK, entry)
 	default:

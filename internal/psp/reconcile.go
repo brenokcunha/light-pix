@@ -242,7 +242,7 @@ func (r *Resolver) handleReconcile(w http.ResponseWriter, req *http.Request) {
 	rep, err := r.Reconcile(req.Context(), from, to, "manual")
 	if err != nil {
 		slog.ErrorContext(req.Context(), "reconciliação manual falhou", "err", err)
-		httpx.WriteError(w, http.StatusBadGateway, "RECONCILIATION_FAILED", err.Error())
+		httpx.WriteError(w, http.StatusBadGateway, "RECONCILIATION_FAILED", "reconciliação falhou; veja o log")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, rep)
@@ -264,7 +264,7 @@ func (r *Resolver) handleDeadLetters(w http.ResponseWriter, req *http.Request) {
 		err = cur.All(req.Context(), &out)
 	}
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, req, err)
 		return
 	}
 	if out == nil {

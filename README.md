@@ -5,6 +5,13 @@ SPI e Bacen e observabilidade open source. Arquitetura e fases em
 [docs/arquitetura.md](docs/arquitetura.md); o mapa dos módulos (pacotes Go e
 componentes em execução) está em [docs/modulos.md](docs/modulos.md).
 
+> **Projeto de estudo, não use em produção.** Não há autenticação nem TLS: as
+> APIs (inclusive `/admin/*` e a injeção de falhas), o MongoDB e o RabbitMQ
+> aceitam qualquer chamada, e as credenciais (`lightpix`) são de demonstração.
+> O Compose e o kind publicam as portas só em `127.0.0.1`; não as exponha na
+> rede. Os dados (nomes, CPFs, contas) são fictícios. Para reportar um problema
+> de segurança, veja [SECURITY.md](SECURITY.md).
+
 ## Pré-requisitos
 
 - Docker com Compose v2
@@ -25,6 +32,7 @@ Primeira subida baixa as imagens e inicializa o replica set do MongoDB.
 | Prometheus | http://localhost:9090 |
 | Alertmanager | http://localhost:9093 |
 | RabbitMQ (lightpix / lightpix) | http://localhost:15672 |
+| **Interface de testes** (abas do banco pagador e do recebedor) | http://localhost:8085 |
 | psp-a payment-api (ISPB 11111111; também sobem relay, connector e worker) | http://localhost:8081 |
 | psp-b payment-api (ISPB 22222222; idem) | http://localhost:8082 |
 | resolver do psp-a / psp-b (API administrativa) | http://localhost:8083 / http://localhost:8084 |
@@ -37,6 +45,25 @@ Primeira subida baixa as imagens e inicializa o replica set do MongoDB.
 
 Do host, o MongoDB exige `directConnection=true`: o replica set anuncia o
 nome interno `mongo:27017`, que só resolve dentro da rede do compose.
+
+## Interface de testes
+
+`http://localhost:8085` reúne o fluxo numa página, sem `curl`:
+
+- **Banco pagador** (PSP A por padrão): escolha a conta do cliente, veja o saldo
+  (disponível, reservado, bloqueado) e as chaves Pix cadastradas nela. Busque o
+  destino numa lista de chaves (por trecho da chave ou do nome do titular), informe o
+  valor e envie. O painel de acompanhamento mostra `PENDING` → `SENT` → `CONFIRMED`
+  (ou `REJECTED`) com os horários e a consulta TraceQL do trace.
+- **Banco recebedor** (PSP B): saldo da conta do cliente, o card "Último Pix
+  recebido" e o extrato com os Pix e devoluções recebidos. Quando o valor chega, a aba
+  mostra um aviso e um contador de novidades. O botão de trocar papéis inverte quem paga
+  e quem recebe.
+
+A página fala só com o serviço `lab-ui`, que repassa as chamadas às APIs dos PSPs; a
+listagem de chaves usa `GET /admin/entries` do dict-sim, uma conveniência do
+laboratório (o DICT real não permite listar chaves). A interface não está no chart
+Helm.
 
 ## Fazer um Pix
 

@@ -145,4 +145,5 @@ flowchart LR
 | pending-resolver | `cmd/psp resolver` | `internal/psp` (`Resolver`, DLQ, conciliação, IGA, MED) |
 | spi-sim | `cmd/spi-sim` | `internal/sim/spi` |
 | dict-sim | `cmd/dict-sim` | `internal/sim/dict` |
+| lab-ui (interface de testes, fora dos diagramas: só chama as APIs dos PSPs) | `cmd/lab-ui` | `internal/labui` |
 | bacen-sim | `cmd/bacen-sim` | `internal/sim/bacen` |

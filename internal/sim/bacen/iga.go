@@ -333,7 +333,7 @@ func (s *Server) handleIGASPI(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.ingestSPI(r.Context(), b.Records); err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusAccepted, map[string]int{"accepted": len(b.Records)})
@@ -361,7 +361,7 @@ func (s *Server) handleIGAReports(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.ingestPSP(r.Context(), b.Records); err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusAccepted, map[string]int{"accepted": len(b.Records)})
@@ -379,7 +379,7 @@ func (s *Server) handleIGA(w http.ResponseWriter, r *http.Request) {
 	}
 	rep, err := s.Report(r.Context(), r.PathValue("ispb"), window)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, rep)

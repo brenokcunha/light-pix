@@ -7,16 +7,16 @@ nodes:
   - role: control-plane
     extraPortMappings:
       # payment-api e resolver de cada PSP
-      - { containerPort: 30081, hostPort: 8081 }
-      - { containerPort: 30082, hostPort: 8082 }
-      - { containerPort: 30083, hostPort: 8083 }
-      - { containerPort: 30084, hostPort: 8084 }
+      - { containerPort: 30081, hostPort: 8081, listenAddress: "127.0.0.1" }
+      - { containerPort: 30082, hostPort: 8082, listenAddress: "127.0.0.1" }
+      - { containerPort: 30083, hostPort: 8083, listenAddress: "127.0.0.1" }
+      - { containerPort: 30084, hostPort: 8084, listenAddress: "127.0.0.1" }
       # simuladores: spi, dict, bacen
-      - { containerPort: 30091, hostPort: 8091 }
-      - { containerPort: 30092, hostPort: 8092 }
-      - { containerPort: 30093, hostPort: 8093 }
+      - { containerPort: 30091, hostPort: 8091, listenAddress: "127.0.0.1" }
+      - { containerPort: 30092, hostPort: 8092, listenAddress: "127.0.0.1" }
+      - { containerPort: 30093, hostPort: 8093, listenAddress: "127.0.0.1" }
       # RabbitMQ (gestão), Grafana, Prometheus, Alertmanager
-      - { containerPort: 30672, hostPort: 15672 }
-      - { containerPort: 30300, hostPort: 3000 }
-      - { containerPort: 30900, hostPort: 9090 }
-      - { containerPort: 30903, hostPort: 9093 }
+      - { containerPort: 30672, hostPort: 15672, listenAddress: "127.0.0.1" }
+      - { containerPort: 30300, hostPort: 3000, listenAddress: "127.0.0.1" }
+      - { containerPort: 30900, hostPort: 9090, listenAddress: "127.0.0.1" }
+      - { containerPort: 30903, hostPort: 9093, listenAddress: "127.0.0.1" }

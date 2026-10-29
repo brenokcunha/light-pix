@@ -67,7 +67,7 @@ services:
   psp-a-api:
     <<: *psp
     command: ["api"]
-    ports: ["8081:8080"]
+    ports: ["127.0.0.1:8081:8080"]
     environment:
       <<: *psp-a-env
       PSP_ACCOUNTS_SEED_FILE: /etc/accounts-seed.json
@@ -101,7 +101,7 @@ services:
   psp-a-resolver:
     <<: *psp
     command: ["resolver"]
-    ports: ["8083:8080"]
+    ports: ["127.0.0.1:8083:8080"]
     environment:
       <<: *psp-a-env
       SPI_URL: http://spi-sim:8080
@@ -115,7 +115,7 @@ services:
   psp-b-api:
     <<: *psp
     command: ["api"]
-    ports: ["8082:8080"]
+    ports: ["127.0.0.1:8082:8080"]
     environment:
       <<: *psp-b-env
       PSP_ACCOUNTS_SEED_FILE: /etc/accounts-seed.json
@@ -149,7 +149,7 @@ services:
   psp-b-resolver:
     <<: *psp
     command: ["resolver"]
-    ports: ["8084:8080"]
+    ports: ["127.0.0.1:8084:8080"]
     environment:
       <<: *psp-b-env
       SPI_URL: http://spi-sim:8080
@@ -165,7 +165,7 @@ services:
     <<: *sim
     image: light-pix/spi-sim:dev
     build: {context: ., args: {CMD: spi-sim}}
-    ports: ["8091:8080"]
+    ports: ["127.0.0.1:8091:8080"]
     depends_on:
       mongo: {condition: service_healthy}
       otel-collector: {condition: service_started}
@@ -185,7 +185,7 @@ services:
     <<: *sim
     image: light-pix/dict-sim:dev
     build: {context: ., args: {CMD: dict-sim}}
-    ports: ["8092:8080"]
+    ports: ["127.0.0.1:8092:8080"]
     volumes: [./deploy/sims/dict-seed.json:/etc/dict-seed.json:ro]
     environment:
       <<: *otel-env
@@ -203,7 +203,7 @@ services:
     <<: *sim
     image: light-pix/bacen-sim:dev
     build: {context: ., args: {CMD: bacen-sim}}
-    ports: ["8093:8080"]
+    ports: ["127.0.0.1:8093:8080"]
     environment:
       <<: *otel-env
       OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=local
@@ -211,6 +211,26 @@ services:
       MONGO_DB: bacen
       # Saldo inicial das contas PI (aplicado só na primeira subida).
       BACEN_PI_ACCOUNTS: "11111111:1000000.00,22222222:1000000.00"
+
+  # ------------------------------------------------- Interface de testes
+  # Página com as abas do banco pagador e do recebedor; repassa as chamadas às
+  # APIs dos dois PSPs. http://localhost:8085
+  lab-ui:
+    image: light-pix/lab-ui:dev
+    build: {context: ., args: {CMD: lab-ui}}
+    restart: unless-stopped
+    ports: ["127.0.0.1:8085:8080"]
+    environment:
+      PSP_A_URL: http://psp-a-api:8080
+      PSP_B_URL: http://psp-b-api:8080
+    depends_on:
+      psp-a-api: {condition: service_healthy}
+      psp-b-api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "/app", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   # ---------------------------------------------------------------- Carga
   # k6 sob demanda (profile "load"): make load. As métricas vão ao Prometheus.
@@ -232,7 +252,7 @@ services:
   mongo:
     image: mongo:8.0
     command: ["--replSet", "rs0", "--bind_ip_all"]
-    ports: ["27017:27017"]
+    ports: ["127.0.0.1:27017:27017"]
     volumes: [mongo-data:/data/db]
     # Inicia o replica set na primeira subida e só fica saudável com primário
     # eleito (transações e change streams dependem disso).
@@ -253,7 +273,7 @@ services:
   rabbitmq:
     image: rabbitmq:4.3-management
     hostname: rabbitmq
-    ports: ["5672:5672", "15672:15672"]
+    ports: ["127.0.0.1:5672:5672", "127.0.0.1:15672:15672"]
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
       - ./deploy/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
@@ -270,7 +290,7 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.161.0
     command: ["--config=/etc/otelcol/config.yaml"]
-    ports: ["4317:4317", "4318:4318"]
+    ports: ["127.0.0.1:4317:4317", "127.0.0.1:4318:4318"]
     environment:
       TRACE_SAMPLE_PERCENT: ${TRACE_SAMPLE_PERCENT:-100}
     volumes:
@@ -286,7 +306,7 @@ services:
       - --web.enable-remote-write-receiver
       - --web.enable-lifecycle
       - --enable-feature=exemplar-storage
-    ports: ["9090:9090"]
+    ports: ["127.0.0.1:9090:9090"]
     volumes:
       - ./deploy/observability/prometheus:/etc/prometheus:ro
       - prometheus-data:/prometheus
@@ -294,7 +314,7 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.34.1
     command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
-    ports: ["9093:9093"]
+    ports: ["127.0.0.1:9093:9093"]
     volumes:
       - ./deploy/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
 
@@ -303,7 +323,7 @@ services:
     command: ["-config.file=/etc/tempo/tempo.yaml"]
     # Simplificação de laboratório: root evita ajustar permissão do volume.
     user: "0"
-    ports: ["3200:3200"]
+    ports: ["127.0.0.1:3200:3200"]
     volumes:
       - ./deploy/observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
       - tempo-data:/var/tempo
@@ -311,7 +331,7 @@ services:
   loki:
     image: grafana/loki:3.7.8
     command: ["-config.file=/etc/loki/local-config.yaml"]
-    ports: ["3100:3100"]
+    ports: ["127.0.0.1:3100:3100"]
     volumes: [loki-data:/loki]
 
   alloy:
@@ -321,7 +341,7 @@ services:
       - --server.http.listen-addr=0.0.0.0:12345
       - --storage.path=/var/lib/alloy/data
       - /etc/alloy/config.alloy
-    ports: ["12345:12345"]
+    ports: ["127.0.0.1:12345:12345"]
     volumes:
       - ./deploy/observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -329,7 +349,7 @@ services:
 
   grafana:
     image: grafana/grafana:13.2.3
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"]
     environment:
       # Laboratório local: anônimo entra como Viewer (só dashboards);
       # Explore e edição exigem login admin / lightpix.

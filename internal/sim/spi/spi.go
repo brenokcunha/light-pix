@@ -524,7 +524,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusNotFound, "UNKNOWN_END_TO_END_ID", "transação não encontrada")
 		return
 	case err != nil:
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 		return
 	}
 	st := iso20022.TxInfAndSts{

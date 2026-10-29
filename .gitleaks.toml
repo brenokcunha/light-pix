@@ -1,0 +1,13 @@
+title = "light-pix"
+
+[extend]
+useDefault = true
+
+# Falsos positivos conhecidos: dados de demonstração, sem valor fora do laboratório.
+[[allowlists]]
+description = "Chaves Pix (UUID) fictícias dos seeds do DICT simulado"
+paths = ['''deploy/sims/dict-seed\.json''', '''deploy/helm/light-pix/files/seeds/dict-seed\.json''']
+
+[[allowlists]]
+description = "Hash da senha de demonstração do usuário lightpix no RabbitMQ"
+paths = ['''deploy/rabbitmq/definitions\.json''', '''deploy/helm/light-pix/files/rabbitmq/definitions\.json''']

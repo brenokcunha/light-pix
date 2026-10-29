@@ -130,6 +130,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/entries", s.handleCreate)
 	mux.HandleFunc("GET /api/v1/entries/{key}", s.handleLookup)
 	mux.HandleFunc("DELETE /api/v1/entries/{key}", s.handleDelete)
+	mux.HandleFunc("GET /admin/entries", s.handleAdminList)
 	s.routesMED(mux)
 }
 
@@ -159,7 +160,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		{Key: "account.accountNumber", Value: e.Account.AccountNumber},
 	})
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 		return
 	}
 	if n >= keysPerAccount[e.Owner.Type] {
@@ -176,7 +177,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		// No DICT real, isso abriria portabilidade ou reivindicação de posse.
 		httpx.WriteError(w, http.StatusConflict, "ENTRY_ALREADY_EXISTS", "chave já vinculada")
 	case err != nil:
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 	default:
 		slog.InfoContext(ctx, "chave registrada", "key_type", e.KeyType, "pix_key", e.Key, "participant", e.Account.Participant)
 		httpx.WriteJSON(w, http.StatusCreated, e)
@@ -216,7 +217,7 @@ func (s *Server) handleLookup(w http.ResponseWriter, r *http.Request) {
 		s.count(ctx, "not_found")
 		httpx.WriteError(w, http.StatusNotFound, "ENTRY_NOT_FOUND", "chave não encontrada")
 	case err != nil:
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 	default:
 		s.limiter.charge(bucket, 1, now)
 		s.count(ctx, "found")
@@ -236,7 +237,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	})
 	switch {
 	case err != nil:
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 	case res.DeletedCount == 0:
 		// Chave inexistente ou de outro participante: a resposta é a mesma.
 		httpx.WriteError(w, http.StatusNotFound, "ENTRY_NOT_FOUND", "chave não encontrada")

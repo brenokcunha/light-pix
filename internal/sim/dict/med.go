@@ -158,7 +158,7 @@ func (s *Server) handleCreateInfraction(w http.ResponseWriter, r *http.Request) 
 			httpx.WriteError(w, http.StatusConflict, "INFRACTION_ALREADY_REPORTED", "já existe um relato ativo para este Pix")
 			return
 		}
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 		return
 	}
 	s.countInfraction(r.Context(), "created")
@@ -179,7 +179,7 @@ func (s *Server) handleGetInfraction(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, mongo.ErrNoDocuments) || (err == nil && who != rep.ReporterISPB && who != rep.CounterpartyISPB):
 		httpx.WriteError(w, http.StatusNotFound, "INFRACTION_NOT_FOUND", "relato não encontrado")
 	case err != nil:
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 	default:
 		httpx.WriteJSON(w, http.StatusOK, s.view(rep))
 	}
@@ -204,7 +204,7 @@ func (s *Server) handleListInfractions(w http.ResponseWriter, r *http.Request) {
 		err = cur.All(r.Context(), &list)
 	}
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 		return
 	}
 	out := make([]InfractionReport, len(list))
@@ -284,7 +284,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, who, roleField s
 		return
 	}
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+		httpx.WriteInternal(w, r, err)
 		return
 	}
 	s.countInfraction(r.Context(), event)

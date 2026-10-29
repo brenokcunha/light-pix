@@ -85,7 +85,7 @@ func HandleHealth(mux *http.ServeMux, checks map[string]Check) {
 		for name, check := range checks {
 			if err := check(ctx); err != nil {
 				status = http.StatusServiceUnavailable
-				result[name] = err.Error()
+				result[name] = "indisponível"
 				slog.WarnContext(ctx, "dependência indisponível", "dependency", name, "err", err)
 				continue
 			}
@@ -111,6 +111,13 @@ type Error struct {
 // WriteError responde com o corpo de erro padrão.
 func WriteError(w http.ResponseWriter, status int, code, msg string) {
 	WriteJSON(w, status, Error{Code: code, Message: msg})
+}
+
+// WriteInternal responde 500 com mensagem genérica e registra o erro real no
+// log: o texto do erro pode trazer detalhes de banco ou de infraestrutura.
+func WriteInternal(w http.ResponseWriter, r *http.Request, err error) {
+	slog.ErrorContext(r.Context(), "erro interno", "route", r.Pattern, "err", err)
+	WriteError(w, http.StatusInternalServerError, "INTERNAL", "erro interno")
 }
 
 // DecodeJSON lê o corpo (até 1 MiB) em v, rejeitando campos desconhecidos.

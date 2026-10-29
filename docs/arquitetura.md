@@ -457,6 +457,8 @@ cmd/psp            subcomandos api | relay | connector | worker | resolver
 cmd/spi-sim
 cmd/dict-sim
 cmd/bacen-sim
+cmd/lab-ui         interface de testes (página + proxy para as APIs dos PSPs)
+internal/labui     a página (embutida) e o proxy /api/a/ e /api/b/
 internal/pix       domínio: EndToEndId, estados, regras
 internal/store     MongoDB (repos, transações, change streams)
 internal/broker    RabbitMQ (topologia, publisher confirms, consumidor)

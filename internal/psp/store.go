@@ -69,10 +69,15 @@ func NewStore(ctx context.Context, client *mongo.Client, db *mongo.Database) (*S
 		{s.payments, []mongo.IndexModel{
 			// Para o pending-resolver achar os não terminais parados.
 			{Keys: bson.D{{Key: "state", Value: 1}, {Key: "updatedAt", Value: 1}}},
+			// Extrato da conta (interface de testes): Pix enviados e recebidos.
+			{Keys: bson.D{{Key: "debtor.accountId", Value: 1}, {Key: "createdAt", Value: -1}}},
+			{Keys: bson.D{{Key: "creditor.accountId", Value: 1}, {Key: "createdAt", Value: -1}}},
 		}},
 		{s.returns, []mongo.IndexModel{
 			{Keys: bson.D{{Key: "state", Value: 1}, {Key: "updatedAt", Value: 1}}},
 			{Keys: bson.D{{Key: "returnOf", Value: 1}, {Key: "createdAt", Value: 1}}},
+			{Keys: bson.D{{Key: "debtor.accountId", Value: 1}, {Key: "createdAt", Value: -1}}},
+			{Keys: bson.D{{Key: "creditor.accountId", Value: 1}, {Key: "createdAt", Value: -1}}},
 		}},
 		{s.idem, []mongo.IndexModel{
 			{Keys: bson.D{{Key: "scope", Value: 1}, {Key: "key", Value: 1}}, Options: options.Index().SetUnique(true)},

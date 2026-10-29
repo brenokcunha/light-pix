@@ -31,6 +31,7 @@ func NewAPI(svc *Service, keys KeyRegistry) *API { return &API{svc: svc, keys: k
 
 // Routes registra as rotas.
 func (a *API) Routes(mux *http.ServeMux) {
+	a.registerLabRoutes(mux)
 	mux.HandleFunc("POST /v1/pix/payments", a.handleCreatePayment)
 	mux.HandleFunc("GET /v1/pix/payments/{endToEndId}", a.handleGetPayment)
 	mux.HandleFunc("POST /v1/pix/payments/{endToEndId}/returns", a.handleCreateReturn)

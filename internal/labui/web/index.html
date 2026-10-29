@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Laboratório Pix — interface de testes</title>
+<style>
+  :root {
+    --bg: #f4f6f8; --card: #fff; --ink: #1c2530; --muted: #5b6776; --line: #dde3ea;
+    --brand: #0b6e4f; --brand-ink: #fff; --warn: #b26a00; --bad: #b3261e; --ok: #0b6e4f; --info: #1f5fbf;
+    --focus: #1f5fbf;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 system-ui, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+  header { background: #12332a; color: #fff; padding: 14px 24px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .sub { color: #b9d3c9; font-size: 13px; }
+  header button.swap { margin-left: auto; }
+  nav[role=tablist] { display: flex; gap: 4px; padding: 12px 24px 0; border-bottom: 1px solid var(--line); background: var(--card); }
+  nav button[role=tab] {
+    border: 1px solid transparent; border-bottom: 0; background: none; padding: 10px 18px; font: inherit; cursor: pointer;
+    border-radius: 8px 8px 0 0; color: var(--muted); position: relative;
+  }
+  nav button[role=tab][aria-selected=true] { background: var(--bg); border-color: var(--line); color: var(--ink); font-weight: 600; margin-bottom: -1px; }
+  nav .dot { display: none; background: var(--brand); color: #fff; border-radius: 10px; padding: 0 7px; font-size: 12px; margin-left: 8px; }
+  nav .dot.on { display: inline-block; }
+  main { padding: 20px 24px 40px; max-width: 1100px; margin: 0 auto; }
+  section[role=tabpanel][hidden] { display: none; }
+  .grid { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 12px; }
+  .full { grid-column: 1 / -1; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input, select { width: 100%; padding: 9px 10px; border: 1px solid #b9c3cf; border-radius: 6px; font: inherit; background: #fff; color: var(--ink); }
+  input:focus-visible, select:focus-visible, button:focus-visible, .key-item:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
+  button { font: inherit; cursor: pointer; border-radius: 6px; padding: 9px 16px; border: 1px solid var(--brand); background: var(--brand); color: var(--brand-ink); }
+  button.secondary { background: #fff; color: var(--brand); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .balances { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .balance { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .balance .v { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .balance .l { font-size: 12px; color: var(--muted); }
+  .balance.main .v { font-size: 28px; }
+  .flash { animation: flash 1.6s ease-out; }
+  @keyframes flash { 0% { background: #c9f0dd; } 100% { background: transparent; } }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { font-size: 12px; background: #eef2f6; border: 1px solid var(--line); border-radius: 12px; padding: 2px 10px; font-family: ui-monospace, Consolas, monospace; }
+  .keys { max-height: 230px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; margin-top: 8px; }
+  .key-item { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .key-item:last-child { border-bottom: 0; }
+  .key-item:hover, .key-item[aria-selected=true] { background: #eaf6f0; }
+  .key-item[aria-disabled=true] { opacity: .5; cursor: not-allowed; background: #f6f7f9; }
+  .key-item .k { font-family: ui-monospace, Consolas, monospace; font-size: 13px; overflow-wrap: anywhere; }
+  .key-item .o { color: var(--muted); font-size: 13px; margin-left: auto; text-align: right; }
+  .badge { font-size: 11px; border-radius: 4px; padding: 1px 6px; background: #eef2f6; color: var(--muted); border: 1px solid var(--line); white-space: nowrap; }
+  .badge.ok { background: #e3f4ec; color: var(--ok); border-color: #b9e0cc; }
+  .badge.bad { background: #fbe9e7; color: var(--bad); border-color: #f0c4bf; }
+  .badge.warn { background: #fff3dd; color: var(--warn); border-color: #f0d9a8; }
+  .badge.info { background: #e6effc; color: var(--info); border-color: #bcd2f3; }
+  .steps { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 8px; }
+  .steps li { display: flex; gap: 10px; align-items: baseline; color: var(--muted); }
+  .steps li .n { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); display: inline-grid; place-items: center; font-size: 12px; flex: none; }
+  .steps li.done { color: var(--ink); } .steps li.done .n { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .steps li.now .n { border-color: var(--info); color: var(--info); }
+  .steps li.bad { color: var(--bad); } .steps li.bad .n { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .steps time { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .in { color: var(--ok); } .out { color: var(--ink); }
+  .muted { color: var(--muted); font-size: 13px; }
+  .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+  .error { background: #fbe9e7; border: 1px solid #f0c4bf; color: var(--bad); border-radius: 6px; padding: 8px 10px; margin-top: 10px; }
+  .arrived { border-left: 6px solid var(--ok); }
+  .arrived .big { font-size: 22px; font-weight: 650; }
+  #toast { position: fixed; right: 20px; bottom: 20px; background: #12332a; color: #fff; padding: 12px 16px; border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.25); max-width: 340px; display: none; }
+  #toast.on { display: block; }
+  .row { display: flex; gap: 10px; align-items: end; }
+  .row > * { flex: 1; } .row > button { flex: none; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Laboratório Pix</h1>
+  <span class="sub">interface de testes: banco pagador e banco recebedor</span>
+  <button class="secondary swap" id="swap" title="Troca quem paga e quem recebe">⇄ Inverter papéis</button>
+</header>
+
+<nav role="tablist" aria-label="Bancos">
+  <button role="tab" id="tab-payer" aria-selected="true" aria-controls="panel-payer"></button>
+  <button role="tab" id="tab-receiver" aria-selected="false" aria-controls="panel-receiver" tabindex="-1"></button>
+</nav>
+
+<main>
+  <!-- ===================== BANCO PAGADOR ===================== -->
+  <section role="tabpanel" id="panel-payer" aria-labelledby="tab-payer">
+    <div class="grid">
+      <div class="card">
+        <h2>Conta do cliente</h2>
+        <label for="payer-account">Conta</label>
+        <select id="payer-account"></select>
+        <div class="balances" style="margin-top:12px">
+          <div class="balance main" id="payer-b-available"><div class="l">Disponível</div><div class="v">—</div></div>
+          <div class="balance" id="payer-b-held"><div class="l">Reservado (Pix em andamento)</div><div class="v">—</div></div>
+          <div class="balance" id="payer-b-blocked"><div class="l">Bloqueado (MED)</div><div class="v">—</div></div>
+        </div>
+        <div class="muted" style="margin-top:12px">Chaves Pix cadastradas nesta conta</div>
+        <div class="chips" id="payer-own-keys"></div>
+      </div>
+
+      <div class="card">
+        <h2>Novo Pix</h2>
+        <label for="key-search">Buscar chave ou nome do favorecido</label>
+        <input id="key-search" type="search" autocomplete="off" placeholder="ex.: bob, +5521..., 111444..." aria-controls="key-list">
+        <div class="keys" id="key-list" role="listbox" aria-label="Chaves Pix encontradas"></div>
+        <div class="hint">Os itens em cinza são de contas do mesmo banco (fora do escopo: transferência interna).</div>
+        <div class="row">
+          <div>
+            <label for="key-chosen">Chave de destino</label>
+            <input id="key-chosen" autocomplete="off" placeholder="escolha na lista ou digite">
+          </div>
+          <div style="max-width:150px">
+            <label for="amount">Valor (R$)</label>
+            <input id="amount" inputmode="decimal" value="10,00">
+          </div>
+        </div>
+        <label for="desc">Descrição (opcional)</label>
+        <input id="desc" maxlength="140">
+        <div style="margin-top:14px; display:flex; gap:10px; align-items:center">
+          <button id="send">Enviar Pix</button>
+          <span class="muted" id="send-hint"></span>
+        </div>
+        <div class="error" id="send-error" hidden role="alert"></div>
+      </div>
+
+      <div class="card full" id="track-card" hidden>
+        <h2>Acompanhamento do Pix</h2>
+        <div class="muted">EndToEndId <span class="mono" id="track-e2e"></span></div>
+        <ol class="steps" id="track-steps"></ol>
+        <div class="muted" id="track-summary" style="margin-top:10px"></div>
+        <div class="hint">Trace completo: Grafana → Explore → Tempo → <span class="mono" id="track-traceql"></span></div>
+      </div>
+
+      <div class="card full">
+        <h2>Extrato da conta</h2>
+        <table>
+          <thead><tr><th>Quando</th><th>Operação</th><th>Contraparte</th><th class="num">Valor</th><th>Situação</th></tr></thead>
+          <tbody id="payer-activity"></tbody>
+        </table>
+        <div class="muted" id="payer-activity-empty" hidden>Nenhuma movimentação ainda.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== BANCO RECEBEDOR ===================== -->
+  <section role="tabpanel" id="panel-receiver" aria-labelledby="tab-receiver" hidden>
+    <div class="grid">
+      <div class="card">
+        <h2>Conta do cliente</h2>
+        <label for="receiver-account">Conta</label>
+        <select id="receiver-account"></select>
+        <div class="balances" style="margin-top:12px">
+          <div class="balance main" id="receiver-b-available"><div class="l">Saldo disponível</div><div class="v">—</div></div>
+          <div class="balance" id="receiver-b-held"><div class="l">Reservado</div><div class="v">—</div></div>
+          <div class="balance" id="receiver-b-blocked"><div class="l">Bloqueado (MED)</div><div class="v">—</div></div>
+        </div>
+        <div class="muted" style="margin-top:12px">Chaves Pix cadastradas nesta conta</div>
+        <div class="chips" id="receiver-own-keys"></div>
+      </div>
+
+      <div class="card arrived" id="arrived-card">
+        <h2>Último Pix recebido</h2>
+        <div id="arrived-body" class="muted">Nenhum Pix recebido nesta conta nesta sessão. Envie um na aba do banco pagador.</div>
+      </div>
+
+      <div class="card full">
+        <h2>Pix recebidos e movimentações</h2>
+        <table>
+          <thead><tr><th>Quando</th><th>Operação</th><th>Contraparte</th><th class="num">Valor</th><th>Situação</th></tr></thead>
+          <tbody id="receiver-activity"></tbody>
+        </table>
+        <div class="muted" id="receiver-activity-empty" hidden>Nenhuma movimentação ainda.</div>
+      </div>
+    </div>
+  </section>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+const brl = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+const $ = (id) => document.getElementById(id);
+const PSP_NAME = { a: "PSP A", b: "PSP B" };
+const STATE_LABEL = {
+  PENDING: ["pedido registrado", "warn"], SENT: ["enviado ao SPI", "info"], CONFIRMED: ["liquidado", "ok"],
+  REJECTED: ["rejeitado", "bad"], RECEIVED: ["recebido", "info"], ACCEPTED: ["aceito, aguardando liquidação", "warn"],
+  CREDITED: ["creditado", "ok"],
+};
+const state = {
+  payer: "a", receiver: "b",
+  info: {},                 // ispb de cada PSP
+  accounts: { a: [], b: [] },
+  account: { payer: null, receiver: null },   // {branch, number}
+  chosen: null,             // entrada do diretório escolhida
+  tracking: null,           // Pix em acompanhamento
+  seen: { receiver: new Set() }, unseen: 0, firstReceiverLoad: true,
+};
+
+// ---------------------------------------------------------------- utilidades
+function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+function fmtTime(iso) { return iso ? new Date(iso).toLocaleTimeString("pt-BR") : ""; }
+function fmtDateTime(iso) { return iso ? new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "medium" }) : ""; }
+function badge(st) { const [t, c] = STATE_LABEL[st] || [st, ""]; return `<span class="badge ${c}">${esc(t)}</span>`; }
+function pspOfIspb(ispb) { return Object.keys(state.info).find((k) => state.info[k] === ispb); }
+function pspBadge(ispb) { const k = pspOfIspb(ispb); return `<span class="badge">${esc(k ? PSP_NAME[k] : ispb)}</span>`; }
+function parseAmount(text) {
+  // "1.234,50" (vírgula decimal, ponto de milhar) ou "25.50" (ponto decimal).
+  let t = String(text).trim();
+  t = t.includes(",") ? t.replace(/\./g, "").replace(",", ".") : t;
+  const n = Number(t);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : NaN;
+}
+async function api(psp, path, opts = {}) {
+  const res = await fetch(`/api/${psp}${path}`, opts);
+  let body = null;
+  try { body = await res.json(); } catch { /* sem corpo */ }
+  if (!res.ok) { const e = new Error(body?.message || res.statusText); e.code = body?.code; e.status = res.status; throw e; }
+  return body;
+}
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("on");
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove("on"), 6000);
+}
+
+// ---------------------------------------------------------------- abas e papéis
+function renderTabLabels() {
+  const dot = `<span class="dot${state.unseen ? " on" : ""}" id="dot">${state.unseen || ""}</span>`;
+  $("tab-payer").textContent = `Banco pagador · ${PSP_NAME[state.payer]}`;
+  $("tab-receiver").innerHTML = `Banco recebedor · ${esc(PSP_NAME[state.receiver])}${dot}`;
+}
+function selectTab(role) {
+  for (const r of ["payer", "receiver"]) {
+    const on = r === role;
+    $("tab-" + r).setAttribute("aria-selected", on);
+    $("tab-" + r).tabIndex = on ? 0 : -1;
+    $("panel-" + r).hidden = !on;
+  }
+  if (role === "receiver") { state.unseen = 0; renderTabLabels(); }
+  refreshAll();
+}
+$("tab-payer").onclick = () => selectTab("payer");
+$("tab-receiver").onclick = () => selectTab("receiver");
+document.querySelector("[role=tablist]").addEventListener("keydown", (e) => {
+  if (e.key === "ArrowRight" || e.key === "ArrowLeft") selectTab($("tab-payer").getAttribute("aria-selected") === "true" ? "receiver" : "payer");
+});
+$("swap").onclick = async () => {
+  [state.payer, state.receiver] = [state.receiver, state.payer];
+  state.chosen = null; state.tracking = null; $("track-card").hidden = true; $("key-chosen").value = "";
+  state.seen.receiver = new Set(); state.firstReceiverLoad = true; state.unseen = 0;
+  renderTabLabels();
+  await loadAccounts("payer"); await loadAccounts("receiver"); searchKeys();
+};
+
+// ---------------------------------------------------------------- contas e saldos
+async function loadAccounts(role) {
+  const psp = state[role];
+  const data = await api(psp, "/v1/accounts");
+  state.info[psp] = data.ispb;
+  state.accounts[psp] = data.accounts;
+  const sel = $(role + "-account");
+  sel.innerHTML = data.accounts.map((a) =>
+    `<option value="${esc(a.branch)}/${esc(a.number)}">${esc(a.holder.name)} — ${esc(a.branch)}/${esc(a.number)}</option>`).join("");
+  const first = data.accounts[0];
+  state.account[role] = first ? { branch: first.branch, number: first.number } : null;
+  if (first) sel.value = `${first.branch}/${first.number}`;
+  await refreshRole(role);
+}
+for (const role of ["payer", "receiver"]) {
+  $(role + "-account").onchange = (e) => {
+    const [branch, number] = e.target.value.split("/");
+    state.account[role] = { branch, number };
+    if (role === "receiver") { state.seen.receiver = new Set(); state.firstReceiverLoad = true; }
+    refreshRole(role);
+  };
+}
+const lastBalance = {};
+function renderBalance(role, bal) {
+  const prev = lastBalance[role];
+  for (const [k, id] of [["available", "available"], ["held", "held"], ["blocked", "blocked"]]) {
+    const box = $(`${role}-b-${id}`);
+    const v = bal[k] ?? 0;
+    box.querySelector(".v").textContent = brl.format(v);
+    if (prev && prev[k] !== v) { box.classList.remove("flash"); void box.offsetWidth; box.classList.add("flash"); }
+  }
+  lastBalance[role] = { available: bal.available ?? 0, held: bal.held ?? 0, blocked: bal.blocked ?? 0 };
+}
+async function loadOwnKeys(role) {
+  const a = state.account[role]; if (!a) return;
+  try {
+    const keys = await api(state[role], `/v1/accounts/${a.branch}/${a.number}/keys`);
+    $(role + "-own-keys").innerHTML = keys.length
+      ? keys.map((k) => `<span class="chip" title="${esc(k.KeyType)}">${esc(k.Key)}</span>`).join("")
+      : '<span class="muted">nenhuma chave</span>';
+  } catch { $(role + "-own-keys").innerHTML = '<span class="muted">chaves indisponíveis (DICT)</span>'; }
+}
+
+// ---------------------------------------------------------------- extrato
+function counterpart(item, acc) {
+  const mine = item.direction === "OUT" ? item.debtor : item.creditor;
+  const other = item.direction === "OUT" ? item.creditor : item.debtor;
+  return { mine, other };
+}
+function opLabel(item) {
+  const ret = item.kind === "RETURN";
+  if (item.direction === "OUT") return ret ? "Devolução enviada" : "Pix enviado";
+  return ret ? "Devolução recebida" : "Pix recebido";
+}
+function renderActivity(role, items) {
+  const body = $(role + "-activity");
+  $(role + "-activity-empty").hidden = items.length > 0;
+  body.innerHTML = items.map((it) => {
+    const { other } = counterpart(it);
+    const sign = it.direction === "IN" ? "+" : "−";
+    const cls = it.direction === "IN" ? "in" : "out";
+    const reason = it.reason ? ` <span class="muted">(${esc(it.reason)})</span>` : "";
+    return `<tr>
+      <td>${esc(fmtDateTime(it.createdAt))}</td>
+      <td>${opLabel(it)}</td>
+      <td>${esc(other.name)} ${other.ispb ? pspBadge(other.ispb) : ""}<div class="muted">${esc(other.key || "")}</div></td>
+      <td class="num ${cls}">${sign} ${brl.format(it.amount)}</td>
+      <td>${badge(it.state)}${reason}</td></tr>`;
+  }).join("");
+}
+function checkArrivals(items) {
+  const incoming = items.filter((i) => i.direction === "IN");
+  const seen = state.seen.receiver;
+  const arrived = incoming.filter((i) => i.state === "CREDITED" && !seen.has(i.endToEndId));
+  for (const i of incoming) if (i.state === "CREDITED") seen.add(i.endToEndId);
+  if (state.firstReceiverLoad) { state.firstReceiverLoad = false; paintArrived(incoming.find((i) => i.state === "CREDITED"), false); return; }
+  if (arrived.length) {
+    const latest = arrived[0];
+    paintArrived(latest, true);
+    toast(`${brl.format(latest.amount)} recebido de ${latest.debtor.name}`);
+    if ($("tab-receiver").getAttribute("aria-selected") !== "true") { state.unseen += arrived.length; renderTabLabels(); }
+  }
+}
+function paintArrived(item, fresh) {
+  if (!item) return;
+  const kind = item.kind === "RETURN" ? "Devolução" : "Pix";
+  $("arrived-body").innerHTML = `
+    <div class="big in">+ ${brl.format(item.amount)}</div>
+    <div>${kind} de <strong>${esc(item.debtor.name)}</strong> ${pspBadge(item.debtor.ispb)} ${fresh ? '<span class="badge ok">novo</span>' : ""}</div>
+    <div class="muted">creditado às ${esc(fmtTime(item.finishedAt))} · ${item.finishedAt ? Math.round((new Date(item.finishedAt) - new Date(item.createdAt)) / 100) / 10 : "?"} s desde que a mensagem chegou ao banco</div>
+    <div class="mono">${esc(item.endToEndId)}</div>`;
+}
+
+// ---------------------------------------------------------------- atualização periódica
+async function refreshRole(role) {
+  const a = state.account[role]; if (!a) return;
+  const psp = state[role];
+  try {
+    const [acc, items] = await Promise.all([
+      api(psp, `/v1/accounts/${a.branch}/${a.number}`),
+      api(psp, `/v1/accounts/${a.branch}/${a.number}/payments?limit=15`),
+    ]);
+    renderBalance(role, acc.balance);
+    renderActivity(role, items);
+    if (role === "receiver") checkArrivals(items);
+  } catch (e) { /* o próximo ciclo tenta de novo */ }
+}
+async function refreshAll() { await Promise.all([refreshRole("payer"), refreshRole("receiver")]); }
+setInterval(refreshAll, 1500);
+
+// ---------------------------------------------------------------- escolha da chave
+let searchTimer;
+$("key-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(searchKeys, 200); });
+async function searchKeys() {
+  const q = $("key-search").value.trim();
+  try {
+    const found = await api(state.payer, `/v1/directory/keys?q=${encodeURIComponent(q)}`);
+    // Quem dá para pagar vem primeiro; as chaves do mesmo banco ficam no fim.
+    const mine = state.info[state.payer];
+    const entries = [...found].sort((a, b) => (a.Account.Participant === mine) - (b.Account.Participant === mine));
+    const list = $("key-list");
+    list.innerHTML = entries.length ? "" : '<div class="key-item" aria-disabled="true"><span class="muted">nenhuma chave encontrada</span></div>';
+    for (const e of entries) {
+      const same = e.Account.Participant === state.info[state.payer];
+      const div = document.createElement("div");
+      div.className = "key-item"; div.setAttribute("role", "option"); div.tabIndex = 0;
+      div.setAttribute("aria-disabled", same);
+      div.setAttribute("aria-selected", state.chosen?.Key === e.Key);
+      div.innerHTML = `<span class="k">${esc(e.Key)}</span><span class="badge">${esc(e.KeyType)}</span>
+        <span class="o">${esc(e.Owner.Name)}<br>${pspBadge(e.Account.Participant)} ${esc(e.Account.Branch)}/${esc(e.Account.AccountNumber)}</span>`;
+      const pick = () => { if (!same) chooseKey(e); };
+      div.onclick = pick; div.onkeydown = (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(); } };
+      list.appendChild(div);
+    }
+  } catch (err) { $("key-list").innerHTML = `<div class="key-item" aria-disabled="true"><span class="muted">lista indisponível: ${esc(err.message)}</span></div>`; }
+}
+function chooseKey(entry) {
+  state.chosen = entry;
+  $("key-chosen").value = entry.Key;
+  for (const el of $("key-list").children) el.setAttribute("aria-selected", el.querySelector(".k")?.textContent === entry.Key);
+  // O banco recebedor passa a mostrar a conta dona da chave.
+  if (state.info[state.receiver] === entry.Account.Participant) {
+    const value = `${entry.Account.Branch}/${entry.Account.AccountNumber}`;
+    const sel = $("receiver-account");
+    if ([...sel.options].some((o) => o.value === value)) {
+      sel.value = value; state.account.receiver = { branch: entry.Account.Branch, number: entry.Account.AccountNumber };
+      state.seen.receiver = new Set(); state.firstReceiverLoad = true; loadOwnKeys("receiver"); refreshRole("receiver");
+    }
+  }
+}
+$("key-chosen").addEventListener("input", () => { state.chosen = null; });
+
+// ---------------------------------------------------------------- enviar o Pix
+$("send").onclick = async () => {
+  const err = $("send-error"); err.hidden = true;
+  const key = $("key-chosen").value.trim();
+  const amount = parseAmount($("amount").value);
+  const acc = state.account.payer;
+  if (!acc) return;
+  if (!key) { err.textContent = "Escolha ou digite a chave de destino."; err.hidden = false; return; }
+  if (!(amount > 0)) { err.textContent = "Informe um valor maior que zero (ex.: 25,50)."; err.hidden = false; return; }
+  $("send").disabled = true;
+  try {
+    const idem = crypto.randomUUID();
+    const body = { debtorAccount: { branch: acc.branch, number: acc.number }, key, amount, description: $("desc").value.trim() || undefined };
+    const p = await api(state.payer, "/v1/pix/payments", {
+      method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idem }, body: JSON.stringify(body),
+    });
+    $("send-hint").textContent = `Idempotency-Key ${idem.slice(0, 8)}…`;
+    startTracking(p);
+    refreshRole("payer");
+  } catch (e) {
+    err.textContent = `${e.code ? e.code + ": " : ""}${e.message}`; err.hidden = false;
+  } finally { $("send").disabled = false; }
+};
+
+// ---------------------------------------------------------------- acompanhamento
+const STEPS = [["PENDING", "Pedido aceito: saldo reservado e mensagem na outbox"], ["SENT", "Enviado ao SPI"], ["CONFIRMED", "Liquidado: SPI confirmou (ACSC) e a reserva foi baixada"]];
+function startTracking(p) {
+  state.tracking = { id: p.endToEndId, done: false };
+  $("track-card").hidden = false;
+  $("track-e2e").textContent = p.endToEndId;
+  $("track-traceql").textContent = `{span.pix.end_to_end_id="${p.endToEndId}"}`;
+  paintTracking(p);
+  pollTracking();
+}
+function paintTracking(p) {
+  const at = {}; for (const h of p.history || []) at[h.state] = h;
+  const rejected = p.state === "REJECTED";
+  const items = STEPS.map(([st, text], i) => {
+    const done = !!at[st]; const isNow = !done && !rejected && (i === 0 || at[STEPS[i - 1][0]]);
+    return `<li class="${done ? "done" : isNow ? "now" : ""}"><span class="n">${done ? "✓" : i + 1}</span><span>${esc(text)}</span><time>${done ? esc(fmtTime(at[st].at)) : isNow ? "aguardando…" : ""}</time></li>`;
+  });
+  if (rejected) items.push(`<li class="bad"><span class="n">!</span><span>Rejeitado (${esc(p.reason || "sem motivo")}): a reserva voltou ao saldo</span><time>${esc(fmtTime(at.REJECTED?.at))}</time></li>`);
+  $("track-steps").innerHTML = items.join("");
+  const finished = p.state === "CONFIRMED" || rejected;
+  $("track-summary").textContent = finished && p.finishedAt
+    ? `${brl.format(p.amount)} para ${p.creditor.name} (${p.creditor.key || "chave"}) — ${rejected ? "rejeitado" : "liquidado"} em ${Math.round(new Date(p.finishedAt) - new Date(p.createdAt))} ms, do pedido ao resultado.`
+    : `${brl.format(p.amount)} para ${p.creditor.name} — em andamento…`;
+}
+async function pollTracking() {
+  const t = state.tracking; if (!t || t.done) return;
+  try {
+    const p = await api(state.payer, `/v1/pix/payments/${t.id}`);
+    if (state.tracking?.id !== t.id) return;
+    paintTracking(p);
+    if (p.state === "CONFIRMED" || p.state === "REJECTED") { t.done = true; refreshAll(); return; }
+  } catch { /* tenta de novo */ }
+  setTimeout(pollTracking, 400);
+}
+
+// ---------------------------------------------------------------- início
+(async function init() {
+  renderTabLabels();
+  try {
+    await Promise.all([loadAccounts("payer"), loadAccounts("receiver")]);
+    await Promise.all([loadOwnKeys("payer"), loadOwnKeys("receiver"), searchKeys()]);
+  } catch (e) {
+    $("send-error").textContent = `Não consegui falar com os bancos: ${e.message}. A stack está no ar (make up)?`;
+    $("send-error").hidden = false;
+  }
+  for (const role of ["payer", "receiver"]) $(role + "-account").addEventListener("change", () => loadOwnKeys(role));
+})();
+</script>
+</body>
+</html>
